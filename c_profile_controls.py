@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSpinBox,
+    QDoubleSpinBox,
     QMessageBox,
 )
 
@@ -11,16 +12,21 @@ from machine_config import (
     C_ID,
     P1_36,
     P5_20,
+    P5_60,
     C_PROFILE_MIN_MS,
     C_PROFILE_MAX_MS,
     C_PROFILE_STEP_MS,
     C_RAMP_DEFAULT_MS,
     C_SCURVE_DEFAULT_MS,
+    C_SPEED_MIN_RPM,
+    C_SPEED_MAX_RPM,
+    C_SPEED_STEP_RPM,
+    C_SPEED_DEFAULT_RPM,
 )
 
 
 def attach_c_profile_controls(window):
-    """Attach commissioning controls for C-axis PR ramp and S-curve."""
+    """Attach commissioning controls for C-axis PR ramp, S-curve and speed."""
 
     central = window.centralWidget()
     if central is None or central.layout() is None:
@@ -41,15 +47,24 @@ def attach_c_profile_controls(window):
     scurve.setSuffix(" ms")
     scurve.setValue(C_SCURVE_DEFAULT_MS)
 
+    speed = QDoubleSpinBox()
+    speed.setRange(C_SPEED_MIN_RPM, C_SPEED_MAX_RPM)
+    speed.setSingleStep(C_SPEED_STEP_RPM)
+    speed.setDecimals(1)
+    speed.setSuffix(" rpm")
+    speed.setValue(C_SPEED_DEFAULT_RPM)
+
     apply_button = QPushButton("Apply to C Axis")
     status = QLabel("Not applied in this session")
 
-    layout.addWidget(QLabel("Ramp (Accel/Decel):"), 0, 0)
-    layout.addWidget(ramp, 0, 1)
-    layout.addWidget(QLabel("S-curve:"), 0, 2)
-    layout.addWidget(scurve, 0, 3)
+    layout.addWidget(QLabel("Speed:"), 0, 0)
+    layout.addWidget(speed, 0, 1)
+    layout.addWidget(QLabel("Ramp (Accel/Decel):"), 0, 2)
+    layout.addWidget(ramp, 0, 3)
+    layout.addWidget(QLabel("S-curve:"), 0, 4)
+    layout.addWidget(scurve, 0, 5)
     layout.addWidget(apply_button, 1, 0, 1, 2)
-    layout.addWidget(status, 1, 2, 1, 2)
+    layout.addWidget(status, 1, 2, 1, 4)
 
     box.setLayout(layout)
 
@@ -68,11 +83,21 @@ def attach_c_profile_controls(window):
             )
             return
 
+        speed_rpm = speed.value()
+        speed_raw = round(speed_rpm * 10.0)
         ramp_ms = ramp.value()
         scurve_ms = scurve.value()
 
         try:
             window.timer.stop()
+
+            window.modbus.write_u16(C_ID, P5_60, speed_raw)
+            speed_readback = window.modbus.read_u16(C_ID, P5_60)
+            if speed_readback != speed_raw:
+                raise RuntimeError(
+                    f"C: P5-60 readback {speed_readback / 10:.1f} rpm, "
+                    f"expected {speed_rpm:.1f} rpm."
+                )
 
             window.modbus.write_u16(C_ID, P5_20, ramp_ms)
             ramp_readback = window.modbus.read_u16(C_ID, P5_20)
@@ -90,12 +115,14 @@ def attach_c_profile_controls(window):
                     f"expected {scurve_ms} ms."
                 )
 
-            # Keep MotionController's safety verification synchronized with
-            # the operator-selected C-axis S-curve value.
+            # Keep MotionController safety verification synchronized with
+            # the operator-selected C-axis profile values.
+            window.motion.c_expected_speed_raw = speed_raw
             window.motion.c_expected_scurve_ms = scurve_ms
 
             status.setText(
-                f"Applied: Ramp {ramp_readback} ms / "
+                f"Applied: {speed_readback / 10:.1f} rpm / "
+                f"Ramp {ramp_readback} ms / "
                 f"S-curve {scurve_readback} ms"
             )
 
@@ -110,6 +137,7 @@ def attach_c_profile_controls(window):
 
     apply_button.clicked.connect(apply_profile)
 
+    window.c_speed_spin = speed
     window.c_ramp_spin = ramp
     window.c_scurve_spin = scurve
     window.c_profile_apply_button = apply_button
