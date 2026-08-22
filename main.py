@@ -3,6 +3,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from main_window import MainWindow
+from c_profile_controls import attach_c_profile_controls
 
 from machine_config import (
     APP_NAME,
@@ -24,6 +25,7 @@ def main():
     )
 
     window = MainWindow()
+    attach_c_profile_controls(window)
 
     window.show()
 
