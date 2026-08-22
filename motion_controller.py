@@ -24,7 +24,7 @@ from machine_config import (
     EXPECTED_C_SCURVE_MS,
     JOG_STEP_DEG,
     ABSOLUTE_LIMIT_DEG,
-    MAX_MOVE_PER_COMMAND_DEG,
+    MAX_RELATIVE_MOVE_DEG,
     MOVE_TIMEOUT_SECONDS,
     MOTION_POLL_INTERVAL_SECONDS,
     GAMMA_PUU_PER_DEGREE,
@@ -199,14 +199,23 @@ class MotionController:
         )
 
     def execute_relative(self, axis: Axis, delta_degree: float):
-        if abs(delta_degree) > MAX_MOVE_PER_COMMAND_DEG:
+        if abs(delta_degree) > MAX_RELATIVE_MOVE_DEG + 1e-9:
             raise RuntimeError(
-                f"{axis.name}: internal step {delta_degree:+.4f}° exceeds "
-                f"{MAX_MOVE_PER_COMMAND_DEG:.1f}°."
+                f"{axis.name}: relative move {delta_degree:+.4f}° exceeds "
+                f"the maximum legal span of {MAX_RELATIVE_MOVE_DEG:.1f}°."
             )
 
         self.verify_axis(axis)
         self.verify_servo_selection(axis)
+
+        current_angle = self.get_current_angle(axis)
+        target_angle = current_angle + delta_degree
+
+        if abs(target_angle) > ABSOLUTE_LIMIT_DEG + 1e-9:
+            raise RuntimeError(
+                f"{axis.name}: resulting target {target_angle:+.4f}° exceeds "
+                f"the ±{ABSOLUTE_LIMIT_DEG:.1f}° commissioning limit."
+            )
 
         feedback_before = self.modbus.read_s32(axis.slave_id, P0_09)
         delta_puu = self.degree_to_puu(axis, delta_degree)
@@ -254,26 +263,16 @@ class MotionController:
         self.verify_axis(axis)
         self.verify_servo_selection(axis)
 
-        while True:
-            current = self.get_current_angle(axis)
-            remaining = target_degree - current
+        current = self.get_current_angle(axis)
+        remaining = target_degree - current
 
-            if abs(remaining) <= 0.01:
-                return
+        if abs(remaining) <= 0.01:
+            return
 
-            if remaining > 0:
-                step = min(remaining, MAX_MOVE_PER_COMMAND_DEG)
-            else:
-                step = max(remaining, -MAX_MOVE_PER_COMMAND_DEG)
-
-            intermediate_target = current + step
-
-            if abs(intermediate_target) > ABSOLUTE_LIMIT_DEG:
-                raise RuntimeError(
-                    f"{axis.name}: intermediate target exceeds software limit."
-                )
-
-            self.execute_relative(axis, step)
+        # One continuous PR command. There are no intermediate 1° stops.
+        # Safety is enforced by the absolute ±15° target limit above and
+        # again inside execute_relative().
+        self.execute_relative(axis, remaining)
 
     def return_to_zero(self, axis: Axis):
         self.move_absolute(axis, 0.0)
