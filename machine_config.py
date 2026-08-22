@@ -1,6 +1,6 @@
 # ============================================================
 # Lumigon - Machine Configuration
-# HMI v0.3.2
+# HMI v0.3.3
 # ============================================================
 
 PORT = "COM4"
@@ -29,7 +29,12 @@ SON_BIT = 0x0002
 
 PR_CONTROL_WORD = 0x00000042
 PR_SPEED_RAW = 50
-EXPECTED_SCURVE_MS = 200
+
+# Axis-specific S-curve tuning.
+# Gamma is already behaving well at 200 ms.
+# C is under commissioning at 300 ms to reduce post-stop excitation.
+EXPECTED_GAMMA_SCURVE_MS = 200
+EXPECTED_C_SCURVE_MS = 300
 
 JOG_STEP_DEG = 0.1
 
@@ -67,4 +72,4 @@ C_TOLERANCE_PUU = 30
 REFRESH_INTERVAL_MS = 1000
 
 APP_NAME = "Lumigon"
-APP_VERSION = "0.3.2"
+APP_VERSION = "0.3.3"
