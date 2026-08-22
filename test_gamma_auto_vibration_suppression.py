@@ -38,7 +38,7 @@ from machine_config import (
     SON_BIT,
     PR_CONTROL_WORD,
     PR_SPEED_RAW,
-    REQUIRED_SCURVE_MS,
+    EXPECTED_SCURVE_MS,
     GAMMA_PUU_PER_DEGREE,
     GAMMA_SIGN,
 )
@@ -149,9 +149,9 @@ def verify_preflight(bus: DeltaModbus) -> tuple[int, int, int, int]:
         raise RuntimeError(
             f"Gamma P6-02 0x{control:08X} != expected 0x{PR_CONTROL_WORD:08X}"
         )
-    if scurve != REQUIRED_SCURVE_MS:
+    if scurve != EXPECTED_SCURVE_MS:
         raise RuntimeError(
-            f"Gamma P1-36 {scurve} ms != required {REQUIRED_SCURVE_MS} ms"
+            f"Gamma P1-36 {scurve} ms != required {EXPECTED_SCURVE_MS} ms"
         )
 
     return gamma_alarm, gamma_status, c_alarm, c_status
@@ -214,7 +214,6 @@ def main() -> None:
         forward_feedback = execute_relative(bus, delta_puu)
         print(f"Forward feedback reached: {forward_feedback:+d} PUU")
 
-        # Give the drive time to finish its vibration-identification update.
         time.sleep(1.0)
         after_forward = read_lf(bus)
         print_lf("LF parameters AFTER FORWARD MOVE", after_forward)
