@@ -69,6 +69,7 @@ class MotionController:
         self.gamma_zero_puu = None
         self.c_zero_puu = None
         self.c_expected_scurve_ms = EXPECTED_C_SCURVE_MS
+        self.c_expected_speed_raw = PR_SPEED_RAW
 
     def set_session_zero(self, gamma_zero_puu: int, c_zero_puu: int):
         self.gamma_zero_puu = gamma_zero_puu
@@ -106,6 +107,11 @@ class MotionController:
             return EXPECTED_GAMMA_SCURVE_MS
         return self.c_expected_scurve_ms
 
+    def expected_speed_raw(self, axis: Axis) -> int:
+        if axis.slave_id == GAMMA_ID:
+            return PR_SPEED_RAW
+        return self.c_expected_speed_raw
+
     def verify_axis(self, axis: Axis):
         alarm = self.modbus.read_u16(axis.slave_id, P0_01)
         if alarm != 0:
@@ -130,10 +136,11 @@ class MotionController:
             )
 
         speed = self.modbus.read_u16(axis.slave_id, P5_60)
-        if speed != PR_SPEED_RAW:
+        expected_speed = self.expected_speed_raw(axis)
+        if speed != expected_speed:
             raise RuntimeError(
                 f"{axis.name}: PR speed is {speed / 10:.1f} rpm, "
-                f"expected {PR_SPEED_RAW / 10:.1f} rpm."
+                f"expected {expected_speed / 10:.1f} rpm."
             )
 
         scurve = self.modbus.read_u16(axis.slave_id, P1_36)
