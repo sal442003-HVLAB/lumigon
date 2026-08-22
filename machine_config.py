@@ -1,6 +1,6 @@
 # ============================================================
 # Lumigon - Machine Configuration
-# HMI v0.3.3
+# HMI v0.3.4
 # ============================================================
 
 PORT = "COM4"
@@ -31,19 +31,23 @@ PR_CONTROL_WORD = 0x00000042
 PR_SPEED_RAW = 50
 
 # Axis-specific S-curve tuning.
-# Gamma is already behaving well at 200 ms.
-# C is under commissioning at 300 ms to reduce post-stop excitation.
 EXPECTED_GAMMA_SCURVE_MS = 200
-EXPECTED_C_SCURVE_MS = 300
+EXPECTED_C_SCURVE_MS = 400
 
 JOG_STEP_DEG = 0.1
 
-# Commissioning software limit. Mechanical freedom is larger, but the HMI
-# remains intentionally conservative until homing/limit wiring is complete.
+# Commissioning software position limit around Session Zero.
+# Any target must remain inside -15° ... +15° on either axis.
 ABSOLUTE_LIMIT_DEG = 15.0
-MAX_MOVE_PER_COMMAND_DEG = 1.0
 
-MOVE_TIMEOUT_SECONDS = 7.0
+# A direct move from one legal extreme (-15°) to the other (+15°)
+# can require a 30° relative PR command. The controller checks the
+# resulting absolute target before issuing the command.
+MAX_RELATIVE_MOVE_DEG = 2.0 * ABSOLUTE_LIMIT_DEG
+
+# At 5 rpm motor speed and the installed gear ratios, a full legal
+# -15° -> +15° move can take around 15-20 seconds. Keep margin here.
+MOVE_TIMEOUT_SECONDS = 30.0
 MOTION_POLL_INTERVAL_SECONDS = 0.05
 
 PUU_PER_MOTOR_REV = 100000.0
@@ -72,4 +76,4 @@ C_TOLERANCE_PUU = 30
 REFRESH_INTERVAL_MS = 1000
 
 APP_NAME = "Lumigon"
-APP_VERSION = "0.3.3"
+APP_VERSION = "0.3.4"
