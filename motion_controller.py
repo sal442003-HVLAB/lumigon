@@ -22,7 +22,8 @@ from machine_config import (
     P6_03,
     SON_BIT,
     PR_CONTROL_WORD,
-    PR_SPEED_RAW,
+    GAMMA_PR_SPEED_RAW,
+    C_PR_SPEED_RAW,
     C_ACCEL_DECEL_MS,
     C_S_CURVE_MS,
     JOG_STEP_DEG,
@@ -166,16 +167,22 @@ class MotionController:
                 "feedback position."
             )
 
+        expected_speed = (
+            GAMMA_PR_SPEED_RAW
+            if axis.slave_id == GAMMA_ID
+            else C_PR_SPEED_RAW
+        )
+
         speed = self.modbus.read_u16(
             axis.slave_id,
             P5_60,
         )
 
-        if speed != PR_SPEED_RAW:
+        if speed != expected_speed:
             raise RuntimeError(
                 f"{axis.name}: PR speed is "
                 f"{speed / 10:.1f} rpm, "
-                "expected 5.0 rpm."
+                f"expected {expected_speed / 10:.1f} rpm."
             )
 
         control = self.modbus.read_u32(
@@ -249,6 +256,30 @@ class MotionController:
         if axis.slave_id != C_ID:
             return
 
+        current_speed = self.modbus.read_u16(
+            axis.slave_id,
+            P5_60,
+        )
+
+        if current_speed != C_PR_SPEED_RAW:
+            self.modbus.write_u16(
+                axis.slave_id,
+                P5_60,
+                C_PR_SPEED_RAW,
+            )
+
+            readback = self.modbus.read_u16(
+                axis.slave_id,
+                P5_60,
+            )
+
+            if readback != C_PR_SPEED_RAW:
+                raise RuntimeError(
+                    f"{axis.name}: P5-60 verification failed. "
+                    f"Read {readback / 10:.1f} rpm, "
+                    f"expected {C_PR_SPEED_RAW / 10:.1f} rpm."
+                )
+
         current_accel_decel = self.modbus.read_u16(
             axis.slave_id,
             P5_20,
@@ -313,9 +344,9 @@ class MotionController:
                 "±0.1 degree jog commands."
             )
 
+        self.configure_motion_profile(axis)
         self.verify_axis(axis)
         self.verify_servo_selection(axis)
-        self.configure_motion_profile(axis)
 
         feedback = self.modbus.read_s32(
             axis.slave_id,
