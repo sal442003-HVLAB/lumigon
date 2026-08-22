@@ -10,7 +10,6 @@ from machine_config import (
 
 import serial
 
-
 from PySide6.QtCore import (
     QTimer,
     Qt,
@@ -21,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QLabel,
     QPushButton,
+    QSpinBox,
     QGridLayout,
     QVBoxLayout,
     QHBoxLayout,
@@ -44,6 +44,11 @@ from machine_config import (
     P0_17,
     P0_46,
     SON_BIT,
+    C_ACCEL_DECEL_MS,
+    C_S_CURVE_MS,
+    C_PROFILE_MIN_MS,
+    C_PROFILE_MAX_MS,
+    C_PROFILE_STEP_MS,
     GAMMA_PUU_PER_DEGREE,
     C_PUU_PER_DEGREE,
     GAMMA_SIGN,
@@ -69,91 +74,23 @@ class AxisPanel(QGroupBox):
         self.son_label = QLabel("—")
         self.monitor_label = QLabel("—")
 
-        self.jog_minus_button = QPushButton(
-            "-0.1°"
-        )
+        self.jog_minus_button = QPushButton("-0.1°")
+        self.jog_plus_button = QPushButton("+0.1°")
 
-        self.jog_plus_button = QPushButton(
-            "+0.1°"
-        )
-
-        layout.addWidget(
-            QLabel("Feedback position:"),
-            0,
-            0,
-        )
-        layout.addWidget(
-            self.position_label,
-            0,
-            1,
-        )
-
-        layout.addWidget(
-            QLabel("Angle:"),
-            1,
-            0,
-        )
-        layout.addWidget(
-            self.angle_label,
-            1,
-            1,
-        )
-
-        layout.addWidget(
-            QLabel("Servo ON:"),
-            2,
-            0,
-        )
-        layout.addWidget(
-            self.son_label,
-            2,
-            1,
-        )
-
-        layout.addWidget(
-            QLabel("Alarm:"),
-            3,
-            0,
-        )
-        layout.addWidget(
-            self.alarm_label,
-            3,
-            1,
-        )
-
-        layout.addWidget(
-            QLabel("Status:"),
-            4,
-            0,
-        )
-        layout.addWidget(
-            self.status_label,
-            4,
-            1,
-        )
-
-        layout.addWidget(
-            QLabel("P0-17 monitor:"),
-            5,
-            0,
-        )
-        layout.addWidget(
-            self.monitor_label,
-            5,
-            1,
-        )
-
-        layout.addWidget(
-            self.jog_minus_button,
-            6,
-            0,
-        )
-
-        layout.addWidget(
-            self.jog_plus_button,
-            6,
-            1,
-        )
+        layout.addWidget(QLabel("Feedback position:"), 0, 0)
+        layout.addWidget(self.position_label, 0, 1)
+        layout.addWidget(QLabel("Angle:"), 1, 0)
+        layout.addWidget(self.angle_label, 1, 1)
+        layout.addWidget(QLabel("Servo ON:"), 2, 0)
+        layout.addWidget(self.son_label, 2, 1)
+        layout.addWidget(QLabel("Alarm:"), 3, 0)
+        layout.addWidget(self.alarm_label, 3, 1)
+        layout.addWidget(QLabel("Status:"), 4, 0)
+        layout.addWidget(self.status_label, 4, 1)
+        layout.addWidget(QLabel("P0-17 monitor:"), 5, 0)
+        layout.addWidget(self.monitor_label, 5, 1)
+        layout.addWidget(self.jog_minus_button, 6, 0)
+        layout.addWidget(self.jog_plus_button, 6, 1)
 
         self.setLayout(layout)
 
@@ -163,32 +100,18 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle(
-            f"{APP_NAME} {APP_VERSION}"
-        )
+        self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
+        self.resize(900, 620)
 
-        self.resize(
-            900,
-            520,
-        )
-
-        self.modbus = DeltaModbus(
-            PORT
-        )
-        self.motion = MotionController(
-            self.modbus
-        )
+        self.modbus = DeltaModbus(PORT)
+        self.motion = MotionController(self.modbus)
 
         self.gamma_zero_puu = None
         self.c_zero_puu = None
 
         self.timer = QTimer(self)
-        self.timer.setInterval(
-            REFRESH_INTERVAL_MS
-        )
-        self.timer.timeout.connect(
-            self.refresh_data
-        )
+        self.timer.setInterval(REFRESH_INTERVAL_MS)
+        self.timer.timeout.connect(self.refresh_data)
 
         self.build_ui()
         self.apply_style()
@@ -200,211 +123,134 @@ class MainWindow(QMainWindow):
     def build_ui(self):
 
         central = QWidget()
+        main_layout = QVBoxLayout(central)
 
-        main_layout = QVBoxLayout(
-            central
-        )
-
-        # ----------------------------------------------------
         # Header
-        # ----------------------------------------------------
-
         header_layout = QHBoxLayout()
-
-        title = QLabel(
-            "LUMIGON"
-        )
-
-        title.setObjectName(
-            "appTitle"
-        )
-
-        header_layout.addWidget(
-            title
-        )
-
+        title = QLabel("LUMIGON")
+        title.setObjectName("appTitle")
+        header_layout.addWidget(title)
         header_layout.addStretch()
 
-        self.connection_label = QLabel(
-            "● Disconnected"
-        )
+        self.connection_label = QLabel("● Disconnected")
+        self.connection_label.setObjectName("connectionOff")
+        header_layout.addWidget(self.connection_label)
+        main_layout.addLayout(header_layout)
 
-        self.connection_label.setObjectName(
-            "connectionOff"
-        )
-
-        header_layout.addWidget(
-            self.connection_label
-        )
-
-        main_layout.addLayout(
-            header_layout
-        )
-
-        # ----------------------------------------------------
-        # Connection controls
-        # ----------------------------------------------------
-
-        connection_box = QGroupBox(
-            "Communication"
-        )
-
+        # Communication
+        connection_box = QGroupBox("Communication")
         connection_layout = QHBoxLayout()
-
-        connection_layout.addWidget(
-            QLabel(
-                f"Port: {PORT}"
-            )
-        )
-
-        connection_layout.addWidget(
-            QLabel(
-                "38400 baud / 8N2 / Modbus RTU"
-            )
-        )
-
+        connection_layout.addWidget(QLabel(f"Port: {PORT}"))
+        connection_layout.addWidget(QLabel("38400 baud / 8N2 / Modbus RTU"))
         connection_layout.addStretch()
 
-        self.connect_button = QPushButton(
-            "Connect"
-        )
+        self.connect_button = QPushButton("Connect")
+        self.disconnect_button = QPushButton("Disconnect")
+        self.connect_button.clicked.connect(self.connect_drives)
+        self.disconnect_button.clicked.connect(self.disconnect_drives)
+        connection_layout.addWidget(self.connect_button)
+        connection_layout.addWidget(self.disconnect_button)
+        connection_box.setLayout(connection_layout)
+        main_layout.addWidget(connection_box)
 
-        self.disconnect_button = QPushButton(
-            "Disconnect"
-        )
-
-        self.connect_button.clicked.connect(
-            self.connect_drives
-        )
-
-        self.disconnect_button.clicked.connect(
-            self.disconnect_drives
-        )
-
-        connection_layout.addWidget(
-            self.connect_button
-        )
-
-        connection_layout.addWidget(
-            self.disconnect_button
-        )
-
-        connection_box.setLayout(
-            connection_layout
-        )
-
-        main_layout.addWidget(
-            connection_box
-        )
-
-        # ----------------------------------------------------
         # Axis panels
-        # ----------------------------------------------------
-
         axis_layout = QHBoxLayout()
+        self.gamma_panel = AxisPanel("Gamma Axis — S1")
+        self.c_panel = AxisPanel("C Axis — S2")
+        axis_layout.addWidget(self.gamma_panel)
+        axis_layout.addWidget(self.c_panel)
+        main_layout.addLayout(axis_layout)
 
-        self.gamma_panel = AxisPanel(
-            "Gamma Axis — S1"
-        )
-
-        self.c_panel = AxisPanel(
-            "C Axis — S2"
-        )
-
-        axis_layout.addWidget(
-            self.gamma_panel
-        )
-
-        axis_layout.addWidget(
-            self.c_panel
-        )
-
-        main_layout.addLayout(
-            axis_layout
-        )
         self.gamma_panel.jog_minus_button.clicked.connect(
-            lambda: self.jog_axis(
-                GAMMA,
-                -JOG_STEP_DEG,
-            )
+            lambda: self.jog_axis(GAMMA, -JOG_STEP_DEG)
         )
-
         self.gamma_panel.jog_plus_button.clicked.connect(
-            lambda: self.jog_axis(
-                GAMMA,
-                +JOG_STEP_DEG,
-            )
+            lambda: self.jog_axis(GAMMA, +JOG_STEP_DEG)
         )
-
         self.c_panel.jog_minus_button.clicked.connect(
-            lambda: self.jog_axis(
-                C_AXIS,
-                -JOG_STEP_DEG,
-            )
+            lambda: self.jog_axis(C_AXIS, -JOG_STEP_DEG)
         )
-
         self.c_panel.jog_plus_button.clicked.connect(
-            lambda: self.jog_axis(
-                C_AXIS,
-                +JOG_STEP_DEG,
-            )
+            lambda: self.jog_axis(C_AXIS, +JOG_STEP_DEG)
         )
-        # ----------------------------------------------------
+
+        # C-axis commissioning profile
+        profile_box = QGroupBox("C Axis Motion Profile")
+        profile_layout = QGridLayout()
+
+        self.c_ramp_spin = QSpinBox()
+        self.c_ramp_spin.setRange(C_PROFILE_MIN_MS, C_PROFILE_MAX_MS)
+        self.c_ramp_spin.setSingleStep(C_PROFILE_STEP_MS)
+        self.c_ramp_spin.setSuffix(" ms")
+        self.c_ramp_spin.setValue(C_ACCEL_DECEL_MS)
+
+        self.c_s_curve_spin = QSpinBox()
+        self.c_s_curve_spin.setRange(C_PROFILE_MIN_MS, C_PROFILE_MAX_MS)
+        self.c_s_curve_spin.setSingleStep(C_PROFILE_STEP_MS)
+        self.c_s_curve_spin.setSuffix(" ms")
+        self.c_s_curve_spin.setValue(C_S_CURVE_MS)
+
+        self.c_profile_status = QLabel(
+            "Applied on next C-axis movement"
+        )
+        self.c_profile_status.setObjectName("profileStatus")
+
+        self.c_ramp_spin.valueChanged.connect(
+            self.update_c_motion_profile
+        )
+        self.c_s_curve_spin.valueChanged.connect(
+            self.update_c_motion_profile
+        )
+
+        profile_layout.addWidget(QLabel("Ramp (Accel/Decel):"), 0, 0)
+        profile_layout.addWidget(self.c_ramp_spin, 0, 1)
+        profile_layout.addWidget(QLabel("S-curve:"), 0, 2)
+        profile_layout.addWidget(self.c_s_curve_spin, 0, 3)
+        profile_layout.addWidget(self.c_profile_status, 1, 0, 1, 4)
+
+        profile_box.setLayout(profile_layout)
+        main_layout.addWidget(profile_box)
+
+        # Initialize controller from UI values
+        self.update_c_motion_profile()
+
         # Zero controls
-        # ----------------------------------------------------
-
         zero_layout = QHBoxLayout()
+        self.zero_button = QPushButton("Capture Session Zero")
+        self.zero_button.clicked.connect(self.capture_session_zero)
+        zero_layout.addWidget(self.zero_button)
 
-        self.zero_button = QPushButton(
-            "Capture Session Zero"
-        )
-
-        self.zero_button.clicked.connect(
-            self.capture_session_zero
-        )
-
-        zero_layout.addWidget(
-            self.zero_button
-        )
-
-        self.zero_info_label = QLabel(
-            "Session zero not captured"
-        )
-
-        zero_layout.addWidget(
-            self.zero_info_label
-        )
-
+        self.zero_info_label = QLabel("Session zero not captured")
+        zero_layout.addWidget(self.zero_info_label)
         zero_layout.addStretch()
+        main_layout.addLayout(zero_layout)
 
-        main_layout.addLayout(
-            zero_layout
-        )
-
-        # ----------------------------------------------------
         # Safety notice
-        # ----------------------------------------------------
-
         notice = QLabel(
             "HMI v0.2 — Commissioning Mode — "
-        "Only ±0.1° jog commands are permitted."
+            "Only ±0.1° jog commands are permitted."
         )
+        notice.setAlignment(Qt.AlignCenter)
+        notice.setObjectName("readOnlyNotice")
+        main_layout.addWidget(notice)
 
-        notice.setAlignment(
-            Qt.AlignCenter
-        )
+        self.setCentralWidget(central)
 
-        notice.setObjectName(
-            "readOnlyNotice"
-        )
+    def update_c_motion_profile(self, _value=None):
+        ramp_ms = self.c_ramp_spin.value()
+        s_curve_ms = self.c_s_curve_spin.value()
 
-        main_layout.addWidget(
-            notice
-        )
-
-        self.setCentralWidget(
-            central
-        )
+        try:
+            self.motion.set_c_motion_profile(
+                ramp_ms,
+                s_curve_ms,
+            )
+            self.c_profile_status.setText(
+                f"Selected: Ramp {ramp_ms} ms / "
+                f"S-curve {s_curve_ms} ms — applies on next C move"
+            )
+        except ValueError as exc:
+            self.c_profile_status.setText(str(exc))
 
     # ========================================================
     # Styling
@@ -454,6 +300,14 @@ class MainWindow(QMainWindow):
                 background-color: #0F568E;
             }
 
+            QSpinBox {
+                background-color: #17232D;
+                border: 1px solid #34495E;
+                border-radius: 5px;
+                padding: 6px 8px;
+                min-width: 110px;
+            }
+
             QLabel#appTitle {
                 font-size: 24pt;
                 font-weight: 700;
@@ -468,6 +322,11 @@ class MainWindow(QMainWindow):
             QLabel#connectionOn {
                 color: #55EFC4;
                 font-weight: 700;
+            }
+
+            QLabel#profileStatus {
+                color: #AAB7C4;
+                padding-top: 4px;
             }
 
             QLabel#readOnlyNotice {
@@ -489,40 +348,19 @@ class MainWindow(QMainWindow):
         try:
             self.modbus.connect()
 
-            # Communication test
-            self.modbus.read_u16(
-                GAMMA_ID,
-                P0_01,
-            )
+            self.modbus.read_u16(GAMMA_ID, P0_01)
+            self.modbus.read_u16(C_ID, P0_01)
 
-            self.modbus.read_u16(
-                C_ID,
-                P0_01,
-            )
-
-            self.connection_label.setText(
-                "● Connected"
-            )
-
-            self.connection_label.setObjectName(
-                "connectionOn"
-            )
-
-            self.connection_label.style().unpolish(
-                self.connection_label
-            )
-            self.connection_label.style().polish(
-                self.connection_label
-            )
+            self.connection_label.setText("● Connected")
+            self.connection_label.setObjectName("connectionOn")
+            self.connection_label.style().unpolish(self.connection_label)
+            self.connection_label.style().polish(self.connection_label)
 
             self.refresh_data()
-
             self.timer.start()
 
         except Exception as exc:
-
             self.modbus.disconnect()
-
             QMessageBox.critical(
                 self,
                 "Connection Error",
@@ -532,23 +370,12 @@ class MainWindow(QMainWindow):
     def disconnect_drives(self):
 
         self.timer.stop()
-
         self.modbus.disconnect()
 
-        self.connection_label.setText(
-            "● Disconnected"
-        )
-
-        self.connection_label.setObjectName(
-            "connectionOff"
-        )
-
-        self.connection_label.style().unpolish(
-            self.connection_label
-        )
-        self.connection_label.style().polish(
-            self.connection_label
-        )
+        self.connection_label.setText("● Disconnected")
+        self.connection_label.setObjectName("connectionOff")
+        self.connection_label.style().unpolish(self.connection_label)
+        self.connection_label.style().polish(self.connection_label)
 
     # ========================================================
     # Read Axis
@@ -559,29 +386,11 @@ class MainWindow(QMainWindow):
         slave_id: int,
     ) -> dict:
 
-        alarm = self.modbus.read_u16(
-            slave_id,
-            P0_01,
-        )
-
-        feedback = self.modbus.read_s32(
-            slave_id,
-            P0_09,
-        )
-
-        monitor = self.modbus.read_u16(
-            slave_id,
-            P0_17,
-        )
-
-        status = self.modbus.read_u16(
-            slave_id,
-            P0_46,
-        )
-
-        son = bool(
-            status & SON_BIT
-        )
+        alarm = self.modbus.read_u16(slave_id, P0_01)
+        feedback = self.modbus.read_s32(slave_id, P0_09)
+        monitor = self.modbus.read_u16(slave_id, P0_17)
+        status = self.modbus.read_u16(slave_id, P0_46)
+        son = bool(status & SON_BIT)
 
         return {
             "alarm": alarm,
@@ -601,21 +410,14 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            gamma = self.read_axis(
-                GAMMA_ID
-            )
-
-            c_axis = self.read_axis(
-                C_ID
-            )
+            gamma = self.read_axis(GAMMA_ID)
+            c_axis = self.read_axis(C_ID)
 
             self.update_axis_panel(
                 panel=self.gamma_panel,
                 data=gamma,
                 zero_puu=self.gamma_zero_puu,
-                puu_per_degree=(
-                    GAMMA_PUU_PER_DEGREE
-                ),
+                puu_per_degree=GAMMA_PUU_PER_DEGREE,
                 sign=GAMMA_SIGN,
             )
 
@@ -623,9 +425,7 @@ class MainWindow(QMainWindow):
                 panel=self.c_panel,
                 data=c_axis,
                 zero_puu=self.c_zero_puu,
-                puu_per_degree=(
-                    C_PUU_PER_DEGREE
-                ),
+                puu_per_degree=C_PUU_PER_DEGREE,
                 sign=C_SIGN,
             )
 
@@ -634,18 +434,15 @@ class MainWindow(QMainWindow):
             serial.SerialException
         ) as exc:
             self.timer.stop()
-
             QMessageBox.critical(
                 self,
                 "Communication Error",
                 str(exc),
             )
-
             self.disconnect_drives()
 
         except Exception as exc:
             self.timer.stop()
-
             QMessageBox.critical(
                 self,
                 "Unexpected Error",
@@ -662,58 +459,24 @@ class MainWindow(QMainWindow):
     ):
 
         feedback = data["feedback"]
-
-        panel.position_label.setText(
-            f"{feedback:+d} PUU"
-        )
+        panel.position_label.setText(f"{feedback:+d} PUU")
 
         if zero_puu is None:
-            panel.angle_label.setText(
-                "Zero not set"
-            )
+            panel.angle_label.setText("Zero not set")
         else:
-            delta_puu = (
-                feedback
-                - zero_puu
-            )
+            delta_puu = feedback - zero_puu
+            angle = delta_puu / puu_per_degree / sign
+            panel.angle_label.setText(f"{angle:+.4f}°")
 
-            angle = (
-                delta_puu
-                / puu_per_degree
-                / sign
-            )
-
-            panel.angle_label.setText(
-                f"{angle:+.4f}°"
-            )
-
-        if data["son"]:
-            panel.son_label.setText(
-                "ON"
-            )
-        else:
-            panel.son_label.setText(
-                "OFF"
-            )
-
-        panel.alarm_label.setText(
-            f"0x{data['alarm']:04X}"
-        )
-
-        panel.status_label.setText(
-            f"0x{data['status']:04X}"
-        )
+        panel.son_label.setText("ON" if data["son"] else "OFF")
+        panel.alarm_label.setText(f"0x{data['alarm']:04X}")
+        panel.status_label.setText(f"0x{data['status']:04X}")
 
         monitor = data["monitor"]
-
         if monitor == 0:
-            panel.monitor_label.setText(
-                "0 — Feedback Position"
-            )
+            panel.monitor_label.setText("0 — Feedback Position")
         else:
-            panel.monitor_label.setText(
-                f"{monitor} — WARNING"
-            )
+            panel.monitor_label.setText(f"{monitor} — WARNING")
 
     # ========================================================
     # Session Zero
@@ -730,18 +493,13 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self.gamma_zero_puu = (
-                self.modbus.read_s32(
-                    GAMMA_ID,
-                    P0_09,
-                )
+            self.gamma_zero_puu = self.modbus.read_s32(
+                GAMMA_ID,
+                P0_09,
             )
-
-            self.c_zero_puu = (
-                self.modbus.read_s32(
-                    C_ID,
-                    P0_09,
-                )
+            self.c_zero_puu = self.modbus.read_s32(
+                C_ID,
+                P0_09,
             )
 
             self.zero_info_label.setText(
@@ -765,9 +523,9 @@ class MainWindow(QMainWindow):
             )
 
     def jog_axis(
-            self,
-            axis,
-            delta_degree,
+        self,
+        axis,
+        delta_degree,
     ):
 
         if not self.modbus.is_connected:
@@ -779,8 +537,8 @@ class MainWindow(QMainWindow):
             return
 
         if (
-                self.gamma_zero_puu is None
-                or self.c_zero_puu is None
+            self.gamma_zero_puu is None
+            or self.c_zero_puu is None
         ):
             QMessageBox.warning(
                 self,
@@ -789,20 +547,14 @@ class MainWindow(QMainWindow):
             )
             return
 
-        direction = (
-            "+"
-            if delta_degree > 0
-            else "-"
-        )
+        direction = "+" if delta_degree > 0 else "-"
 
         answer = QMessageBox.question(
             self,
             "Confirm Limited Jog",
-            f"{axis.name}: move "
-            f"{direction}0.1°?\n\n"
+            f"{axis.name}: move {direction}0.1°?\n\n"
             "Keep the physical E-STOP accessible.",
-            QMessageBox.Yes
-            | QMessageBox.No,
+            QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
 
@@ -816,6 +568,13 @@ class MainWindow(QMainWindow):
                 axis,
                 delta_degree,
             )
+
+            if axis.slave_id == C_ID:
+                self.c_profile_status.setText(
+                    "Applied: "
+                    f"Ramp {self.c_ramp_spin.value()} ms / "
+                    f"S-curve {self.c_s_curve_spin.value()} ms"
+                )
 
             QTimer.singleShot(
                 500,
@@ -840,8 +599,6 @@ class MainWindow(QMainWindow):
         self,
         event,
     ):
-
         self.timer.stop()
         self.modbus.disconnect()
-
         event.accept()
