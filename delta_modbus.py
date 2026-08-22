@@ -1,0 +1,392 @@
+import serial
+import struct
+import time
+
+from machine_config import (
+    BAUD_RATE,
+    SERIAL_TIMEOUT,
+)
+
+
+class DeltaModbusError(RuntimeError):
+    pass
+
+
+class DeltaModbus:
+    """
+    Read-only Modbus RTU communication layer
+    for Delta ASDA-A2 servo drives.
+
+    HMI v0.1 intentionally contains NO write command.
+    """
+
+    def __init__(self, port: str):
+        self.port = port
+        self.ser: serial.Serial | None = None
+
+    # ========================================================
+    # Connection
+    # ========================================================
+
+    @property
+    def is_connected(self) -> bool:
+        return (
+            self.ser is not None
+            and self.ser.is_open
+        )
+
+    def connect(self) -> None:
+        if self.is_connected:
+            return
+
+        self.ser = serial.Serial(
+            port=self.port,
+            baudrate=BAUD_RATE,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_TWO,
+            timeout=SERIAL_TIMEOUT,
+            write_timeout=SERIAL_TIMEOUT,
+        )
+
+        time.sleep(0.1)
+
+        self.ser.reset_input_buffer()
+        self.ser.reset_output_buffer()
+
+    def disconnect(self) -> None:
+        if self.ser is not None:
+            try:
+                if self.ser.is_open:
+                    self.ser.close()
+            finally:
+                self.ser = None
+
+    # ========================================================
+    # CRC
+    # ========================================================
+
+    @staticmethod
+    def crc16_modbus(data: bytes) -> int:
+        crc = 0xFFFF
+
+        for byte in data:
+            crc ^= byte
+
+            for _ in range(8):
+                if crc & 0x0001:
+                    crc = (
+                        (crc >> 1)
+                        ^ 0xA001
+                    )
+                else:
+                    crc >>= 1
+
+        return crc & 0xFFFF
+
+    @classmethod
+    def add_crc(
+        cls,
+        body: bytes,
+    ) -> bytes:
+
+        crc = cls.crc16_modbus(body)
+
+        return (
+            body
+            + struct.pack("<H", crc)
+        )
+
+    @classmethod
+    def validate_crc(
+        cls,
+        response: bytes,
+    ) -> None:
+
+        if len(response) < 5:
+            raise DeltaModbusError(
+                f"Response too short: "
+                f"{len(response)} bytes"
+            )
+
+        received_crc = int.from_bytes(
+            response[-2:],
+            byteorder="little",
+        )
+
+        calculated_crc = cls.crc16_modbus(
+            response[:-2]
+        )
+
+        if received_crc != calculated_crc:
+            raise DeltaModbusError(
+                "CRC mismatch: "
+                f"RX=0x{received_crc:04X}, "
+                f"CALC=0x{calculated_crc:04X}"
+            )
+
+    # ========================================================
+    # Read Holding Registers - FC03
+    # ========================================================
+
+    def read_registers(
+            self,
+            slave_id: int,
+            address: int,
+            count: int,
+    ) -> list[int]:
+
+        if not self.is_connected:
+            raise DeltaModbusError(
+                "Serial port is not connected."
+            )
+
+        body = struct.pack(
+            ">BBHH",
+            slave_id,
+            0x03,
+            address,
+            count,
+        )
+
+        request = self.add_crc(body)
+
+        expected_length = 5 + count * 2
+
+        last_error = None
+
+        for attempt in range(3):
+
+            try:
+                self.ser.reset_input_buffer()
+
+                self.ser.write(request)
+                self.ser.flush()
+
+                # ASDA-A2 / USB-RS485 settling time
+                time.sleep(0.03)
+
+                response = self.ser.read(
+                    expected_length
+                )
+
+                if len(response) != expected_length:
+                    raise DeltaModbusError(
+                        f"S{slave_id}: incomplete response "
+                        f"reading 0x{address:04X} "
+                        f"({len(response)}/{expected_length} bytes)"
+                    )
+
+                self.validate_crc(response)
+
+                if response[0] != slave_id:
+                    raise DeltaModbusError(
+                        f"Unexpected slave ID: "
+                        f"{response[0]}"
+                    )
+
+                function = response[1]
+
+                if function == 0x83:
+                    raise DeltaModbusError(
+                        f"S{slave_id}: Modbus exception "
+                        f"0x{response[2]:02X}"
+                    )
+
+                if function != 0x03:
+                    raise DeltaModbusError(
+                        "Unexpected Modbus function: "
+                        f"0x{function:02X}"
+                    )
+
+                if response[2] != count * 2:
+                    raise DeltaModbusError(
+                        "Unexpected byte count: "
+                        f"{response[2]}"
+                    )
+
+                return [
+                    int.from_bytes(
+                        response[
+                            3 + 2 * i:
+                            5 + 2 * i
+                        ],
+                        byteorder="big",
+                        signed=False,
+                    )
+                    for i in range(count)
+                ]
+
+            except (
+                    DeltaModbusError,
+                    serial.SerialException,
+            ) as exc:
+
+                last_error = exc
+
+                if attempt < 2:
+                    time.sleep(0.08)
+
+        raise DeltaModbusError(
+            f"S{slave_id}: communication failed "
+            f"after 3 attempts reading "
+            f"0x{address:04X}. "
+            f"Last error: {last_error}"
+        )
+
+    # ========================================================
+    # Typed reads
+    # ========================================================
+
+    def read_u16(
+        self,
+        slave_id: int,
+        address: int,
+    ) -> int:
+
+        return self.read_registers(
+            slave_id,
+            address,
+            1,
+        )[0]
+
+    def read_u32(
+        self,
+        slave_id: int,
+        address: int,
+    ) -> int:
+
+        low_word, high_word = (
+            self.read_registers(
+                slave_id,
+                address,
+                2,
+            )
+        )
+
+        return (
+            ((high_word & 0xFFFF) << 16)
+            | (low_word & 0xFFFF)
+        )
+
+    def read_s32(
+        self,
+        slave_id: int,
+        address: int,
+    ) -> int:
+
+        value = self.read_u32(
+            slave_id,
+            address,
+        )
+
+        if value & 0x80000000:
+            value -= 0x100000000
+
+        return value
+
+    # ========================================================
+    # Controlled writes - HMI v0.2
+    # ========================================================
+
+    def write_s32(
+        self,
+        slave_id: int,
+        address: int,
+        value: int,
+    ) -> None:
+
+        if not self.is_connected:
+            raise DeltaModbusError(
+                "Serial port is not connected."
+            )
+
+        raw = value & 0xFFFFFFFF
+
+        low_word = raw & 0xFFFF
+        high_word = (raw >> 16) & 0xFFFF
+
+        body = struct.pack(
+            ">BBHHBHH",
+            slave_id,
+            0x10,
+            address,
+            2,
+            4,
+            low_word,
+            high_word,
+        )
+
+        request = self.add_crc(body)
+
+        self.ser.reset_input_buffer()
+        self.ser.write(request)
+        self.ser.flush()
+
+        response = self.ser.read(8)
+
+        if not response:
+            raise DeltaModbusError(
+                f"S{slave_id}: no response "
+                f"writing 0x{address:04X}"
+            )
+
+        self.validate_crc(response)
+
+        if response[0] != slave_id:
+            raise DeltaModbusError(
+                "Unexpected slave ID in write response."
+            )
+
+        if response[1] == 0x90:
+            raise DeltaModbusError(
+                f"S{slave_id}: Modbus write exception "
+                f"0x{response[2]:02X}"
+            )
+
+        if response[1] != 0x10:
+            raise DeltaModbusError(
+                "Unexpected write function: "
+                f"0x{response[1]:02X}"
+            )
+
+    def write_u16(
+        self,
+        slave_id: int,
+        address: int,
+        value: int,
+    ) -> None:
+
+        if not self.is_connected:
+            raise DeltaModbusError(
+                "Serial port is not connected."
+            )
+
+        body = struct.pack(
+            ">BBHH",
+            slave_id,
+            0x06,
+            address,
+            value & 0xFFFF,
+        )
+
+        request = self.add_crc(body)
+
+        self.ser.reset_input_buffer()
+        self.ser.write(request)
+        self.ser.flush()
+
+        response = self.ser.read(8)
+
+        if not response:
+            raise DeltaModbusError(
+                f"S{slave_id}: no response "
+                f"writing 0x{address:04X}"
+            )
+
+        self.validate_crc(response)
+
+        if response != request:
+            raise DeltaModbusError(
+                "Write echo mismatch."
+            )
