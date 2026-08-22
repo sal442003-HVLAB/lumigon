@@ -25,6 +25,7 @@ P1_01 = 0x0102       # Control mode
 P2_30 = 0x023C       # Simulation / related configuration
 
 P5_07 = 0x050E       # Execute PR#1
+P5_20 = 0x0528       # Accel/decel slot 0 (ms)
 P5_60 = 0x0578       # Speed slot 0
 P6_02 = 0x0604       # PR#1 control
 P6_03 = 0x0606       # Relative PR position
@@ -39,6 +40,7 @@ SON_BIT = 0x0002
 
 PR_CONTROL_WORD = 0x00000042
 PR_SPEED_RAW = 50            # 5.0 rpm
+C_ACCEL_DECEL_MS = 500       # Commissioning test: softer C-axis ramp
 
 JOG_STEP_DEG = 0.1
 ABSOLUTE_LIMIT_DEG = 5.0
