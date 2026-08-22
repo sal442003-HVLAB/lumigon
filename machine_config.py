@@ -1,6 +1,6 @@
 # ============================================================
 # Lumigon - Machine Configuration
-# HMI v0.3.1
+# HMI v0.3.2
 # ============================================================
 
 PORT = "COM4"
@@ -33,7 +33,9 @@ EXPECTED_SCURVE_MS = 200
 
 JOG_STEP_DEG = 0.1
 
-ABSOLUTE_LIMIT_DEG = 5.0
+# Commissioning software limit. Mechanical freedom is larger, but the HMI
+# remains intentionally conservative until homing/limit wiring is complete.
+ABSOLUTE_LIMIT_DEG = 15.0
 MAX_MOVE_PER_COMMAND_DEG = 1.0
 
 MOVE_TIMEOUT_SECONDS = 7.0
@@ -65,4 +67,4 @@ C_TOLERANCE_PUU = 30
 REFRESH_INTERVAL_MS = 1000
 
 APP_NAME = "Lumigon"
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
