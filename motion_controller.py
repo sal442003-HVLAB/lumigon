@@ -26,6 +26,9 @@ from machine_config import (
     C_PR_SPEED_RAW,
     C_ACCEL_DECEL_MS,
     C_S_CURVE_MS,
+    C_PROFILE_MIN_MS,
+    C_PROFILE_MAX_MS,
+    C_PROFILE_STEP_MS,
     JOG_STEP_DEG,
     ABSOLUTE_LIMIT_DEG,
     GAMMA_PUU_PER_DEGREE,
@@ -69,6 +72,9 @@ class MotionController:
         self.gamma_zero_puu = None
         self.c_zero_puu = None
 
+        self.c_accel_decel_ms = C_ACCEL_DECEL_MS
+        self.c_s_curve_ms = C_S_CURVE_MS
+
     # ========================================================
     # Zero
     # ========================================================
@@ -81,6 +87,44 @@ class MotionController:
 
         self.gamma_zero_puu = gamma_zero_puu
         self.c_zero_puu = c_zero_puu
+
+    # ========================================================
+    # C-axis motion profile
+    # ========================================================
+
+    @staticmethod
+    def _validate_profile_ms(
+        name: str,
+        value: int,
+    ) -> int:
+        value = int(value)
+
+        if not C_PROFILE_MIN_MS <= value <= C_PROFILE_MAX_MS:
+            raise ValueError(
+                f"{name} must be between "
+                f"{C_PROFILE_MIN_MS} and {C_PROFILE_MAX_MS} ms."
+            )
+
+        if value % C_PROFILE_STEP_MS != 0:
+            raise ValueError(
+                f"{name} must use {C_PROFILE_STEP_MS} ms increments."
+            )
+
+        return value
+
+    def set_c_motion_profile(
+        self,
+        accel_decel_ms: int,
+        s_curve_ms: int,
+    ) -> None:
+        self.c_accel_decel_ms = self._validate_profile_ms(
+            "C Ramp",
+            accel_decel_ms,
+        )
+        self.c_s_curve_ms = self._validate_profile_ms(
+            "C S-curve",
+            s_curve_ms,
+        )
 
     # ========================================================
     # Conversion
@@ -251,7 +295,7 @@ class MotionController:
         self,
         axis: Axis,
     ) -> None:
-        """Apply only the commissioning profile intentionally selected per axis."""
+        """Apply the selected C-axis commissioning profile before motion."""
 
         if axis.slave_id != C_ID:
             return
@@ -285,11 +329,11 @@ class MotionController:
             P5_20,
         )
 
-        if current_accel_decel != C_ACCEL_DECEL_MS:
+        if current_accel_decel != self.c_accel_decel_ms:
             self.modbus.write_u16(
                 axis.slave_id,
                 P5_20,
-                C_ACCEL_DECEL_MS,
+                self.c_accel_decel_ms,
             )
 
             readback = self.modbus.read_u16(
@@ -297,11 +341,11 @@ class MotionController:
                 P5_20,
             )
 
-            if readback != C_ACCEL_DECEL_MS:
+            if readback != self.c_accel_decel_ms:
                 raise RuntimeError(
                     f"{axis.name}: P5-20 verification failed. "
                     f"Read {readback} ms, "
-                    f"expected {C_ACCEL_DECEL_MS} ms."
+                    f"expected {self.c_accel_decel_ms} ms."
                 )
 
         current_s_curve = self.modbus.read_u16(
@@ -309,11 +353,11 @@ class MotionController:
             P1_36,
         )
 
-        if current_s_curve != C_S_CURVE_MS:
+        if current_s_curve != self.c_s_curve_ms:
             self.modbus.write_u16(
                 axis.slave_id,
                 P1_36,
-                C_S_CURVE_MS,
+                self.c_s_curve_ms,
             )
 
             readback = self.modbus.read_u16(
@@ -321,11 +365,11 @@ class MotionController:
                 P1_36,
             )
 
-            if readback != C_S_CURVE_MS:
+            if readback != self.c_s_curve_ms:
                 raise RuntimeError(
                     f"{axis.name}: P1-36 verification failed. "
                     f"Read {readback} ms, "
-                    f"expected {C_S_CURVE_MS} ms."
+                    f"expected {self.c_s_curve_ms} ms."
                 )
 
     # ========================================================
