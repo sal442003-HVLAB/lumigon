@@ -1,64 +1,43 @@
 # ============================================================
 # Lumigon - Machine Configuration
-# HMI v0.1
+# HMI v0.3
 # ============================================================
 
 PORT = "COM4"
 BAUD_RATE = 38400
-
 SERIAL_TIMEOUT = 1.0
 
 GAMMA_ID = 1
 C_ID = 2
 
+P0_01 = 0x0002
+P0_09 = 0x0012
+P0_17 = 0x0022
+P0_46 = 0x005C
 
-# ------------------------------------------------------------
-# ASDA-A2 Modbus parameter addresses
-# ------------------------------------------------------------
+P1_01 = 0x0102
+P2_30 = 0x023C
 
-P0_01 = 0x0002       # Alarm code
-P0_09 = 0x0012       # Feedback position
-P0_17 = 0x0022       # Monitor selection
-P0_46 = 0x005C       # Servo status
+P5_07 = 0x050E
+P5_60 = 0x0578
 
-P1_01 = 0x0102       # Control mode
-P2_30 = 0x023C       # Simulation / related configuration
-
-P5_07 = 0x050E       # Execute PR#1
-P5_60 = 0x0578       # Speed slot 0
-P6_02 = 0x0604       # PR#1 control
-P6_03 = 0x0606       # Relative PR position
-
-
-# ------------------------------------------------------------
-# Servo status bits
-# Confirmed during commissioning
-# ------------------------------------------------------------
+P6_02 = 0x0604
+P6_03 = 0x0606
 
 SON_BIT = 0x0002
 
 PR_CONTROL_WORD = 0x00000042
-PR_SPEED_RAW = 50            # 5.0 rpm
+PR_SPEED_RAW = 50
 
 JOG_STEP_DEG = 0.1
+
 ABSOLUTE_LIMIT_DEG = 5.0
+MAX_MOVE_PER_COMMAND_DEG = 1.0
 
-
-# ------------------------------------------------------------
-# Mechanical / electronic scaling
-# ------------------------------------------------------------
-
-# Confirmed electronic gear:
-# P1-44 = 128
-# P1-45 = 10
-#
-# => 100,000 PUU / motor revolution
+MOVE_TIMEOUT_SECONDS = 7.0
+MOTION_POLL_INTERVAL_SECONDS = 0.05
 
 PUU_PER_MOTOR_REV = 100000.0
-
-# Gearboxes:
-# Gamma = 15:1
-# C     = 20:1
 
 GAMMA_GEAR_RATIO = 15.0
 C_GEAR_RATIO = 20.0
@@ -75,24 +54,13 @@ C_PUU_PER_DEGREE = (
     / 360.0
 )
 
-
-# ------------------------------------------------------------
-# Axis direction
-# Confirmed physically
-#
-# Gamma positive angle -> negative PUU
-# C positive angle     -> positive PUU
-# ------------------------------------------------------------
-
 GAMMA_SIGN = -1
 C_SIGN = +1
 
-
-# ------------------------------------------------------------
-# GUI
-# ------------------------------------------------------------
+GAMMA_TOLERANCE_PUU = 25
+C_TOLERANCE_PUU = 30
 
 REFRESH_INTERVAL_MS = 1000
 
 APP_NAME = "Lumigon"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"

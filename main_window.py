@@ -1,3 +1,15 @@
+from PySide6.QtWidgets import (
+    QMainWindow,
+    QWidget,
+    QLabel,
+    QPushButton,
+    QDoubleSpinBox,
+    QGridLayout,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGroupBox,
+    QMessageBox,
+)
 from motion_controller import (
     MotionController,
     GAMMA,
@@ -5,7 +17,9 @@ from motion_controller import (
 )
 
 from machine_config import (
+    ABSOLUTE_LIMIT_DEG,
     JOG_STEP_DEG,
+
 )
 
 import serial
@@ -75,6 +89,23 @@ class AxisPanel(QGroupBox):
 
         self.jog_plus_button = QPushButton(
             "+0.1°"
+        )
+
+        self.target_spin = QDoubleSpinBox()
+        self.target_spin.setRange(
+            -ABSOLUTE_LIMIT_DEG,
+            ABSOLUTE_LIMIT_DEG,
+        )
+        self.target_spin.setDecimals(3)
+        self.target_spin.setSingleStep(0.1)
+        self.target_spin.setSuffix("°")
+
+        self.move_button = QPushButton(
+            "Move to Target"
+        )
+
+        self.zero_return_button = QPushButton(
+            "Return to Zero"
         )
 
         layout.addWidget(
@@ -157,355 +188,443 @@ class AxisPanel(QGroupBox):
 
         self.setLayout(layout)
 
+        layout.addWidget(
+            QLabel("Absolute target:"),
+            7,
+            0,
+        )
+
+        layout.addWidget(
+            self.target_spin,
+            7,
+            1,
+        )
+
+        layout.addWidget(
+            self.move_button,
+            8,
+            0,
+        )
+
+        layout.addWidget(
+            self.zero_return_button,
+            8,
+            1,
+        )
+
+
+
 
 class MainWindow(QMainWindow):
 
-    def __init__(self):
-        super().__init__()
-
-        self.setWindowTitle(
-            f"{APP_NAME} {APP_VERSION}"
-        )
-
-        self.resize(
-            900,
-            520,
-        )
-
-        self.modbus = DeltaModbus(
-            PORT
-        )
-        self.motion = MotionController(
-            self.modbus
-        )
-
-        self.gamma_zero_puu = None
-        self.c_zero_puu = None
-
-        self.timer = QTimer(self)
-        self.timer.setInterval(
-            REFRESH_INTERVAL_MS
-        )
-        self.timer.timeout.connect(
-            self.refresh_data
-        )
-
-        self.build_ui()
-        self.apply_style()
-
-    # ========================================================
-    # UI
-    # ========================================================
-
-    def build_ui(self):
-
-        central = QWidget()
-
-        main_layout = QVBoxLayout(
-            central
-        )
-
-        # ----------------------------------------------------
-        # Header
-        # ----------------------------------------------------
-
-        header_layout = QHBoxLayout()
-
-        title = QLabel(
-            "LUMIGON"
-        )
-
-        title.setObjectName(
-            "appTitle"
-        )
-
-        header_layout.addWidget(
-            title
-        )
-
-        header_layout.addStretch()
-
-        self.connection_label = QLabel(
-            "● Disconnected"
-        )
-
-        self.connection_label.setObjectName(
-            "connectionOff"
-        )
-
-        header_layout.addWidget(
-            self.connection_label
-        )
-
-        main_layout.addLayout(
-            header_layout
-        )
-
-        # ----------------------------------------------------
-        # Connection controls
-        # ----------------------------------------------------
-
-        connection_box = QGroupBox(
-            "Communication"
-        )
-
-        connection_layout = QHBoxLayout()
-
-        connection_layout.addWidget(
-            QLabel(
-                f"Port: {PORT}"
-            )
-        )
-
-        connection_layout.addWidget(
-            QLabel(
-                "38400 baud / 8N2 / Modbus RTU"
-            )
-        )
-
-        connection_layout.addStretch()
-
-        self.connect_button = QPushButton(
-            "Connect"
-        )
-
-        self.disconnect_button = QPushButton(
-            "Disconnect"
-        )
-
-        self.connect_button.clicked.connect(
-            self.connect_drives
-        )
-
-        self.disconnect_button.clicked.connect(
-            self.disconnect_drives
-        )
-
-        connection_layout.addWidget(
-            self.connect_button
-        )
-
-        connection_layout.addWidget(
-            self.disconnect_button
-        )
-
-        connection_box.setLayout(
-            connection_layout
-        )
-
-        main_layout.addWidget(
-            connection_box
-        )
-
-        # ----------------------------------------------------
-        # Axis panels
-        # ----------------------------------------------------
-
-        axis_layout = QHBoxLayout()
-
-        self.gamma_panel = AxisPanel(
-            "Gamma Axis — S1"
-        )
-
-        self.c_panel = AxisPanel(
-            "C Axis — S2"
-        )
-
-        axis_layout.addWidget(
-            self.gamma_panel
-        )
-
-        axis_layout.addWidget(
-            self.c_panel
-        )
-
-        main_layout.addLayout(
-            axis_layout
-        )
-        self.gamma_panel.jog_minus_button.clicked.connect(
-            lambda: self.jog_axis(
-                GAMMA,
-                -JOG_STEP_DEG,
-            )
-        )
-
-        self.gamma_panel.jog_plus_button.clicked.connect(
-            lambda: self.jog_axis(
-                GAMMA,
-                +JOG_STEP_DEG,
-            )
-        )
-
-        self.c_panel.jog_minus_button.clicked.connect(
-            lambda: self.jog_axis(
-                C_AXIS,
-                -JOG_STEP_DEG,
-            )
-        )
-
-        self.c_panel.jog_plus_button.clicked.connect(
-            lambda: self.jog_axis(
-                C_AXIS,
-                +JOG_STEP_DEG,
-            )
-        )
-        # ----------------------------------------------------
-        # Zero controls
-        # ----------------------------------------------------
-
-        zero_layout = QHBoxLayout()
-
-        self.zero_button = QPushButton(
-            "Capture Session Zero"
-        )
-
-        self.zero_button.clicked.connect(
-            self.capture_session_zero
-        )
-
-        zero_layout.addWidget(
-            self.zero_button
-        )
-
-        self.zero_info_label = QLabel(
-            "Session zero not captured"
-        )
-
-        zero_layout.addWidget(
-            self.zero_info_label
-        )
-
-        zero_layout.addStretch()
-
-        main_layout.addLayout(
-            zero_layout
-        )
-
-        # ----------------------------------------------------
-        # Safety notice
-        # ----------------------------------------------------
-
-        notice = QLabel(
-            "HMI v0.2 — Commissioning Mode — "
-        "Only ±0.1° jog commands are permitted."
-        )
-
-        notice.setAlignment(
-            Qt.AlignCenter
-        )
-
-        notice.setObjectName(
-            "readOnlyNotice"
-        )
-
-        main_layout.addWidget(
-            notice
-        )
-
-        self.setCentralWidget(
-            central
-        )
-
-    # ========================================================
-    # Styling
-    # ========================================================
-
-    def apply_style(self):
-
-        self.setStyleSheet(
-            """
-            QMainWindow {
-                background-color: #101820;
-            }
-
-            QWidget {
-                color: #E8EEF3;
-                font-family: Segoe UI;
-                font-size: 10pt;
-            }
-
-            QGroupBox {
-                border: 1px solid #34495E;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 12px;
-                font-weight: 600;
-            }
-
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-            }
-
-            QPushButton {
-                background-color: #1769AA;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 18px;
-                font-weight: 600;
-            }
-
-            QPushButton:hover {
-                background-color: #2185D0;
-            }
-
-            QPushButton:pressed {
-                background-color: #0F568E;
-            }
-
-            QLabel#appTitle {
-                font-size: 24pt;
-                font-weight: 700;
-                color: #4DA3FF;
-            }
-
-            QLabel#connectionOff {
-                color: #FF7675;
-                font-weight: 700;
-            }
-
-            QLabel#connectionOn {
-                color: #55EFC4;
-                font-weight: 700;
-            }
-
-            QLabel#readOnlyNotice {
-                background-color: #17232D;
-                border: 1px solid #34495E;
-                border-radius: 6px;
-                padding: 10px;
-                color: #AAB7C4;
-            }
-            """
-        )
-
-    # ========================================================
-    # Connection
-    # ========================================================
-
-    def connect_drives(self):
-
-        try:
-            self.modbus.connect()
-
-            # Communication test
-            self.modbus.read_u16(
-                GAMMA_ID,
-                P0_01,
+        def __init__(self):
+            super().__init__()
+
+            self.setWindowTitle(
+                f"{APP_NAME} {APP_VERSION}"
             )
 
-            self.modbus.read_u16(
-                C_ID,
-                P0_01,
+            self.resize(
+                900,
+                520,
             )
 
-            self.connection_label.setText(
-                "● Connected"
+            self.modbus = DeltaModbus(
+                PORT
+            )
+            self.motion = MotionController(
+                self.modbus
+            )
+
+            self.gamma_zero_puu = None
+            self.c_zero_puu = None
+
+            self.timer = QTimer(self)
+            self.timer.setInterval(
+                REFRESH_INTERVAL_MS
+            )
+            self.timer.timeout.connect(
+                self.refresh_data
+            )
+
+            self.build_ui()
+            self.apply_style()
+
+        # ========================================================
+        # UI
+        # ========================================================
+
+        def build_ui(self):
+
+            central = QWidget()
+
+            main_layout = QVBoxLayout(
+                central
+            )
+
+            # ----------------------------------------------------
+            # Header
+            # ----------------------------------------------------
+
+            header_layout = QHBoxLayout()
+
+            title = QLabel(
+                "LUMIGON"
+            )
+
+            title.setObjectName(
+                "appTitle"
+            )
+
+            header_layout.addWidget(
+                title
+            )
+
+            header_layout.addStretch()
+
+            self.connection_label = QLabel(
+                "● Disconnected"
             )
 
             self.connection_label.setObjectName(
-                "connectionOn"
+                "connectionOff"
+            )
+
+            header_layout.addWidget(
+                self.connection_label
+            )
+
+            main_layout.addLayout(
+                header_layout
+            )
+
+            # ----------------------------------------------------
+            # Connection controls
+            # ----------------------------------------------------
+
+            connection_box = QGroupBox(
+                "Communication"
+            )
+
+            connection_layout = QHBoxLayout()
+
+            connection_layout.addWidget(
+                QLabel(
+                    f"Port: {PORT}"
+                )
+            )
+
+            connection_layout.addWidget(
+                QLabel(
+                    "38400 baud / 8N2 / Modbus RTU"
+                )
+            )
+
+            connection_layout.addStretch()
+
+            self.connect_button = QPushButton(
+                "Connect"
+            )
+
+            self.disconnect_button = QPushButton(
+                "Disconnect"
+            )
+
+            self.connect_button.clicked.connect(
+                self.connect_drives
+            )
+
+            self.disconnect_button.clicked.connect(
+                self.disconnect_drives
+            )
+
+            connection_layout.addWidget(
+                self.connect_button
+            )
+
+            connection_layout.addWidget(
+                self.disconnect_button
+            )
+
+            connection_box.setLayout(
+                connection_layout
+            )
+
+            main_layout.addWidget(
+                connection_box
+            )
+
+            # ----------------------------------------------------
+            # Axis panels
+            # ----------------------------------------------------
+
+            axis_layout = QHBoxLayout()
+
+            self.gamma_panel = AxisPanel(
+                "Gamma Axis — S1"
+            )
+
+            self.c_panel = AxisPanel(
+                "C Axis — S2"
+            )
+
+            axis_layout.addWidget(
+                self.gamma_panel
+            )
+
+            axis_layout.addWidget(
+                self.c_panel
+            )
+
+            main_layout.addLayout(
+                axis_layout
+            )
+            self.gamma_panel.jog_minus_button.clicked.connect(
+                lambda: self.jog_axis(
+                    GAMMA,
+                    -JOG_STEP_DEG,
+                )
+            )
+
+            self.gamma_panel.jog_plus_button.clicked.connect(
+                lambda: self.jog_axis(
+                    GAMMA,
+                    +JOG_STEP_DEG,
+                )
+            )
+
+            self.c_panel.jog_minus_button.clicked.connect(
+                lambda: self.jog_axis(
+                    C_AXIS,
+                    -JOG_STEP_DEG,
+                )
+            )
+
+            self.c_panel.jog_plus_button.clicked.connect(
+                lambda: self.jog_axis(
+                    C_AXIS,
+                    +JOG_STEP_DEG,
+                )
+            )
+
+            self.gamma_panel.move_button.clicked.connect(
+                lambda: self.move_axis_to_target(
+                    GAMMA,
+                    self.gamma_panel.target_spin.value(),
+                )
+            )
+
+            self.c_panel.move_button.clicked.connect(
+                lambda: self.move_axis_to_target(
+                    C_AXIS,
+                    self.c_panel.target_spin.value(),
+                )
+            )
+
+            self.gamma_panel.zero_return_button.clicked.connect(
+                lambda: self.return_axis_to_zero(
+                    GAMMA
+                )
+            )
+
+            self.c_panel.zero_return_button.clicked.connect(
+                lambda: self.return_axis_to_zero(
+                    C_AXIS
+                )
+            )
+            # ----------------------------------------------------
+            # Zero controls
+            # ----------------------------------------------------
+
+            zero_layout = QHBoxLayout()
+
+            self.zero_button = QPushButton(
+                "Capture Session Zero"
+            )
+
+            self.zero_button.clicked.connect(
+                self.capture_session_zero
+            )
+
+            zero_layout.addWidget(
+                self.zero_button
+            )
+
+            self.zero_info_label = QLabel(
+                "Session zero not captured"
+            )
+
+            zero_layout.addWidget(
+                self.zero_info_label
+            )
+
+            zero_layout.addStretch()
+
+            main_layout.addLayout(
+                zero_layout
+            )
+
+            # ----------------------------------------------------
+            # Safety notice
+            # ----------------------------------------------------
+
+            notice = QLabel(
+                "HMI v0.3 — Commissioning Mode — "
+                "Absolute target limited to ±5°. "
+                "Each PR movement is limited to ≤1°."
+            )
+
+            notice.setAlignment(
+                Qt.AlignCenter
+            )
+
+            notice.setObjectName(
+                "readOnlyNotice"
+            )
+
+            main_layout.addWidget(
+                notice
+            )
+
+            self.setCentralWidget(
+                central
+            )
+
+        # ========================================================
+        # Styling
+        # ========================================================
+
+        def apply_style(self):
+
+            self.setStyleSheet(
+                """
+                QMainWindow {
+                    background-color: #101820;
+                }
+    
+                QWidget {
+                    color: #E8EEF3;
+                    font-family: Segoe UI;
+                    font-size: 10pt;
+                }
+    
+                QGroupBox {
+                    border: 1px solid #34495E;
+                    border-radius: 8px;
+                    margin-top: 12px;
+                    padding-top: 12px;
+                    font-weight: 600;
+                }
+    
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 12px;
+                    padding: 0 6px;
+                }
+    
+                QPushButton {
+                    background-color: #1769AA;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 8px 18px;
+                    font-weight: 600;
+                }
+    
+                QPushButton:hover {
+                    background-color: #2185D0;
+                }
+    
+                QPushButton:pressed {
+                    background-color: #0F568E;
+                }
+    
+                QLabel#appTitle {
+                    font-size: 24pt;
+                    font-weight: 700;
+                    color: #4DA3FF;
+                }
+    
+                QLabel#connectionOff {
+                    color: #FF7675;
+                    font-weight: 700;
+                }
+    
+                QLabel#connectionOn {
+                    color: #55EFC4;
+                    font-weight: 700;
+                }
+    
+                QLabel#readOnlyNotice {
+                    background-color: #17232D;
+                    border: 1px solid #34495E;
+                    border-radius: 6px;
+                    padding: 10px;
+                    color: #AAB7C4;
+                }
+                """
+            )
+
+        # ========================================================
+        # Connection
+        # ========================================================
+
+        def connect_drives(self):
+
+            try:
+                self.modbus.connect()
+
+                # Communication test
+                self.modbus.read_u16(
+                    GAMMA_ID,
+                    P0_01,
+                )
+
+                self.modbus.read_u16(
+                    C_ID,
+                    P0_01,
+                )
+
+                self.connection_label.setText(
+                    "● Connected"
+                )
+
+                self.connection_label.setObjectName(
+                    "connectionOn"
+                )
+
+                self.connection_label.style().unpolish(
+                    self.connection_label
+                )
+                self.connection_label.style().polish(
+                    self.connection_label
+                )
+
+                self.refresh_data()
+
+                self.timer.start()
+
+            except Exception as exc:
+
+                self.modbus.disconnect()
+
+                QMessageBox.critical(
+                    self,
+                    "Connection Error",
+                    str(exc),
+                )
+
+        def disconnect_drives(self):
+
+            self.timer.stop()
+
+            self.modbus.disconnect()
+
+            self.connection_label.setText(
+                "● Disconnected"
+            )
+
+            self.connection_label.setObjectName(
+                "connectionOff"
             )
 
             self.connection_label.style().unpolish(
@@ -515,333 +634,427 @@ class MainWindow(QMainWindow):
                 self.connection_label
             )
 
-            self.refresh_data()
+        # ========================================================
+        # Read Axis
+        # ========================================================
 
-            self.timer.start()
-
-        except Exception as exc:
-
-            self.modbus.disconnect()
-
-            QMessageBox.critical(
-                self,
-                "Connection Error",
-                str(exc),
-            )
-
-    def disconnect_drives(self):
-
-        self.timer.stop()
-
-        self.modbus.disconnect()
-
-        self.connection_label.setText(
-            "● Disconnected"
-        )
-
-        self.connection_label.setObjectName(
-            "connectionOff"
-        )
-
-        self.connection_label.style().unpolish(
-            self.connection_label
-        )
-        self.connection_label.style().polish(
-            self.connection_label
-        )
-
-    # ========================================================
-    # Read Axis
-    # ========================================================
-
-    def read_axis(
-        self,
-        slave_id: int,
-    ) -> dict:
-
-        alarm = self.modbus.read_u16(
-            slave_id,
-            P0_01,
-        )
-
-        feedback = self.modbus.read_s32(
-            slave_id,
-            P0_09,
-        )
-
-        monitor = self.modbus.read_u16(
-            slave_id,
-            P0_17,
-        )
-
-        status = self.modbus.read_u16(
-            slave_id,
-            P0_46,
-        )
-
-        son = bool(
-            status & SON_BIT
-        )
-
-        return {
-            "alarm": alarm,
-            "feedback": feedback,
-            "monitor": monitor,
-            "status": status,
-            "son": son,
-        }
-
-    # ========================================================
-    # Refresh
-    # ========================================================
-
-    def refresh_data(self):
-
-        if not self.modbus.is_connected:
-            return
-
-        try:
-            gamma = self.read_axis(
-                GAMMA_ID
-            )
-
-            c_axis = self.read_axis(
-                C_ID
-            )
-
-            self.update_axis_panel(
-                panel=self.gamma_panel,
-                data=gamma,
-                zero_puu=self.gamma_zero_puu,
-                puu_per_degree=(
-                    GAMMA_PUU_PER_DEGREE
-                ),
-                sign=GAMMA_SIGN,
-            )
-
-            self.update_axis_panel(
-                panel=self.c_panel,
-                data=c_axis,
-                zero_puu=self.c_zero_puu,
-                puu_per_degree=(
-                    C_PUU_PER_DEGREE
-                ),
-                sign=C_SIGN,
-            )
-
-        except (
-            DeltaModbusError,
-            serial.SerialException
-        ) as exc:
-            self.timer.stop()
-
-            QMessageBox.critical(
-                self,
-                "Communication Error",
-                str(exc),
-            )
-
-            self.disconnect_drives()
-
-        except Exception as exc:
-            self.timer.stop()
-
-            QMessageBox.critical(
-                self,
-                "Unexpected Error",
-                str(exc),
-            )
-
-    def update_axis_panel(
-        self,
-        panel: AxisPanel,
-        data: dict,
-        zero_puu,
-        puu_per_degree: float,
-        sign: int,
-    ):
-
-        feedback = data["feedback"]
-
-        panel.position_label.setText(
-            f"{feedback:+d} PUU"
-        )
-
-        if zero_puu is None:
-            panel.angle_label.setText(
-                "Zero not set"
-            )
-        else:
-            delta_puu = (
-                feedback
-                - zero_puu
-            )
-
-            angle = (
-                delta_puu
-                / puu_per_degree
-                / sign
-            )
-
-            panel.angle_label.setText(
-                f"{angle:+.4f}°"
-            )
-
-        if data["son"]:
-            panel.son_label.setText(
-                "ON"
-            )
-        else:
-            panel.son_label.setText(
-                "OFF"
-            )
-
-        panel.alarm_label.setText(
-            f"0x{data['alarm']:04X}"
-        )
-
-        panel.status_label.setText(
-            f"0x{data['status']:04X}"
-        )
-
-        monitor = data["monitor"]
-
-        if monitor == 0:
-            panel.monitor_label.setText(
-                "0 — Feedback Position"
-            )
-        else:
-            panel.monitor_label.setText(
-                f"{monitor} — WARNING"
-            )
-
-    # ========================================================
-    # Session Zero
-    # ========================================================
-
-    def capture_session_zero(self):
-
-        if not self.modbus.is_connected:
-            QMessageBox.warning(
-                self,
-                "Not Connected",
-                "Connect to both drives first.",
-            )
-            return
-
-        try:
-            self.gamma_zero_puu = (
-                self.modbus.read_s32(
-                    GAMMA_ID,
-                    P0_09,
-                )
-            )
-
-            self.c_zero_puu = (
-                self.modbus.read_s32(
-                    C_ID,
-                    P0_09,
-                )
-            )
-
-            self.zero_info_label.setText(
-                "Session zero: "
-                f"Gamma={self.gamma_zero_puu:+d} PUU, "
-                f"C={self.c_zero_puu:+d} PUU"
-            )
-
-            self.motion.set_session_zero(
-                self.gamma_zero_puu,
-                self.c_zero_puu,
-            )
-
-            self.refresh_data()
-
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "Zero Capture Error",
-                str(exc),
-            )
-
-    def jog_axis(
+        def read_axis(
             self,
-            axis,
-            delta_degree,
-    ):
+            slave_id: int,
+        ) -> dict:
 
-        if not self.modbus.is_connected:
-            QMessageBox.warning(
-                self,
-                "Not Connected",
-                "Connect to the drives first.",
+            alarm = self.modbus.read_u16(
+                slave_id,
+                P0_01,
             )
-            return
 
-        if (
-                self.gamma_zero_puu is None
-                or self.c_zero_puu is None
+            feedback = self.modbus.read_s32(
+                slave_id,
+                P0_09,
+            )
+
+            monitor = self.modbus.read_u16(
+                slave_id,
+                P0_17,
+            )
+
+            status = self.modbus.read_u16(
+                slave_id,
+                P0_46,
+            )
+
+            son = bool(
+                status & SON_BIT
+            )
+
+            return {
+                "alarm": alarm,
+                "feedback": feedback,
+                "monitor": monitor,
+                "status": status,
+                "son": son,
+            }
+
+        # ========================================================
+        # Refresh
+        # ========================================================
+
+        def refresh_data(self):
+
+            if not self.modbus.is_connected:
+                return
+
+            try:
+                gamma = self.read_axis(
+                    GAMMA_ID
+                )
+
+                c_axis = self.read_axis(
+                    C_ID
+                )
+
+                self.update_axis_panel(
+                    panel=self.gamma_panel,
+                    data=gamma,
+                    zero_puu=self.gamma_zero_puu,
+                    puu_per_degree=(
+                        GAMMA_PUU_PER_DEGREE
+                    ),
+                    sign=GAMMA_SIGN,
+                )
+
+                self.update_axis_panel(
+                    panel=self.c_panel,
+                    data=c_axis,
+                    zero_puu=self.c_zero_puu,
+                    puu_per_degree=(
+                        C_PUU_PER_DEGREE
+                    ),
+                    sign=C_SIGN,
+                )
+
+            except (
+                DeltaModbusError,
+                serial.SerialException
+            ) as exc:
+                self.timer.stop()
+
+                QMessageBox.critical(
+                    self,
+                    "Communication Error",
+                    str(exc),
+                )
+
+                self.disconnect_drives()
+
+            except Exception as exc:
+                self.timer.stop()
+
+                QMessageBox.critical(
+                    self,
+                    "Unexpected Error",
+                    str(exc),
+                )
+
+        def update_axis_panel(
+            self,
+            panel: AxisPanel,
+            data: dict,
+            zero_puu,
+            puu_per_degree: float,
+            sign: int,
         ):
-            QMessageBox.warning(
-                self,
-                "Session Zero Required",
-                "Capture Session Zero before movement.",
+
+            feedback = data["feedback"]
+
+            panel.position_label.setText(
+                f"{feedback:+d} PUU"
             )
-            return
 
-        direction = (
-            "+"
-            if delta_degree > 0
-            else "-"
-        )
+            if zero_puu is None:
+                panel.angle_label.setText(
+                    "Zero not set"
+                )
+            else:
+                delta_puu = (
+                    feedback
+                    - zero_puu
+                )
 
-        answer = QMessageBox.question(
-            self,
-            "Confirm Limited Jog",
-            f"{axis.name}: move "
-            f"{direction}0.1°?\n\n"
-            "Keep the physical E-STOP accessible.",
-            QMessageBox.Yes
-            | QMessageBox.No,
-            QMessageBox.No,
-        )
+                angle = (
+                    delta_puu
+                    / puu_per_degree
+                    / sign
+                )
 
-        if answer != QMessageBox.Yes:
-            return
+                panel.angle_label.setText(
+                    f"{angle:+.4f}°"
+                )
 
-        self.timer.stop()
+            if data["son"]:
+                panel.son_label.setText(
+                    "ON"
+                )
+            else:
+                panel.son_label.setText(
+                    "OFF"
+                )
 
-        try:
-            self.motion.jog(
+            panel.alarm_label.setText(
+                f"0x{data['alarm']:04X}"
+            )
+
+            panel.status_label.setText(
+                f"0x{data['status']:04X}"
+            )
+
+            monitor = data["monitor"]
+
+            if monitor == 0:
+                panel.monitor_label.setText(
+                    "0 — Feedback Position"
+                )
+            else:
+                panel.monitor_label.setText(
+                    f"{monitor} — WARNING"
+                )
+
+        # ========================================================
+        # Session Zero
+        # ========================================================
+
+        def capture_session_zero(self):
+
+            if not self.modbus.is_connected:
+                QMessageBox.warning(
+                    self,
+                    "Not Connected",
+                    "Connect to both drives first.",
+                )
+                return
+
+            try:
+                self.gamma_zero_puu = (
+                    self.modbus.read_s32(
+                        GAMMA_ID,
+                        P0_09,
+                    )
+                )
+
+                self.c_zero_puu = (
+                    self.modbus.read_s32(
+                        C_ID,
+                        P0_09,
+                    )
+                )
+
+                self.zero_info_label.setText(
+                    "Session zero: "
+                    f"Gamma={self.gamma_zero_puu:+d} PUU, "
+                    f"C={self.c_zero_puu:+d} PUU"
+                )
+
+                self.motion.set_session_zero(
+                    self.gamma_zero_puu,
+                    self.c_zero_puu,
+                )
+                self.gamma_panel.target_spin.setValue(0.0)
+                self.c_panel.target_spin.setValue(0.0)
+
+                self.refresh_data()
+
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Zero Capture Error",
+                    str(exc),
+                )
+
+        def jog_axis(
+                self,
                 axis,
                 delta_degree,
+        ):
+
+            if not self.modbus.is_connected:
+                QMessageBox.warning(
+                    self,
+                    "Not Connected",
+                    "Connect to the drives first.",
+                )
+                return
+
+            if (
+                    self.gamma_zero_puu is None
+                    or self.c_zero_puu is None
+            ):
+                QMessageBox.warning(
+                    self,
+                    "Session Zero Required",
+                    "Capture Session Zero before movement.",
+                )
+                return
+
+            direction = (
+                "+"
+                if delta_degree > 0
+                else "-"
             )
 
-            QTimer.singleShot(
-                500,
-                self.refresh_data,
-            )
-
-        except Exception as exc:
-            QMessageBox.critical(
+            answer = QMessageBox.question(
                 self,
-                "Movement Blocked",
-                str(exc),
+                "Confirm Limited Jog",
+                f"{axis.name}: move "
+                f"{direction}0.1°?\n\n"
+                "Keep the physical E-STOP accessible.",
+                QMessageBox.Yes
+                | QMessageBox.No,
+                QMessageBox.No,
             )
 
-        finally:
-            self.timer.start()
+            if answer != QMessageBox.Yes:
+                return
 
-    # ========================================================
-    # Close
-    # ========================================================
+            self.timer.stop()
 
-    def closeEvent(
-        self,
-        event,
-    ):
+            try:
+                self.motion.jog(
+                    axis,
+                    delta_degree,
+                )
 
-        self.timer.stop()
-        self.modbus.disconnect()
+                QTimer.singleShot(
+                    500,
+                    self.refresh_data,
+                )
 
-        event.accept()
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Movement Blocked",
+                    str(exc),
+                )
+
+            finally:
+                self.timer.start()
+
+        # ========================================================
+        # Close
+        # ========================================================
+        def move_axis_to_target(
+                self,
+                axis,
+                target_degree: float,
+        ):
+
+            if not self.modbus.is_connected:
+                QMessageBox.warning(
+                    self,
+                    "Not Connected",
+                    "Connect to the drives first.",
+                )
+                return
+
+            if (
+                    self.gamma_zero_puu is None
+                    or self.c_zero_puu is None
+            ):
+                QMessageBox.warning(
+                    self,
+                    "Session Zero Required",
+                    "Capture Session Zero before movement.",
+                )
+                return
+
+            current = self.motion.get_current_angle(
+                axis
+            )
+
+            answer = QMessageBox.question(
+                self,
+                "Confirm Absolute Move",
+                f"{axis.name}\n"
+                f"Current: {current:+.3f}°\n"
+                f"Target: {target_degree:+.3f}°\n\n"
+                "Movement will be split into "
+                "steps of at most 1°.\n"
+                "Keep the physical E-STOP accessible.",
+                QMessageBox.Yes
+                | QMessageBox.No,
+                QMessageBox.No,
+            )
+
+            if answer != QMessageBox.Yes:
+                return
+
+            self.timer.stop()
+
+            try:
+                self.motion.move_absolute(
+                    axis,
+                    target_degree,
+                )
+
+                self.refresh_data()
+
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Movement Blocked",
+                    str(exc),
+                )
+
+            finally:
+                self.timer.start()
+
+        def return_axis_to_zero(
+                self,
+                axis,
+        ):
+
+            if not self.modbus.is_connected:
+                QMessageBox.warning(
+                    self,
+                    "Not Connected",
+                    "Connect to the drives first.",
+                )
+                return
+
+            if (
+                    self.gamma_zero_puu is None
+                    or self.c_zero_puu is None
+            ):
+                QMessageBox.warning(
+                    self,
+                    "Session Zero Required",
+                    "Capture Session Zero before movement.",
+                )
+                return
+
+            current = self.motion.get_current_angle(
+                axis
+            )
+
+            answer = QMessageBox.question(
+                self,
+                "Confirm Return to Zero",
+                f"{axis.name}: return from "
+                f"{current:+.3f}° "
+                "to Session Zero?\n\n"
+                "Keep the physical E-STOP accessible.",
+                QMessageBox.Yes
+                | QMessageBox.No,
+                QMessageBox.No,
+            )
+
+            if answer != QMessageBox.Yes:
+                return
+
+            self.timer.stop()
+
+            try:
+                self.motion.return_to_zero(
+                    axis
+                )
+
+                self.refresh_data()
+
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Movement Blocked",
+                    str(exc),
+                )
+
+            finally:
+                self.timer.start()
+
+        def closeEvent(
+            self,
+            event,
+        ):
+
+            self.timer.stop()
+            self.modbus.disconnect()
+
+            event.accept()
