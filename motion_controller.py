@@ -15,12 +15,14 @@ from machine_config import (
     P1_01,
     P2_30,
     P5_07,
+    P5_20,
     P5_60,
     P6_02,
     P6_03,
     SON_BIT,
     PR_CONTROL_WORD,
     PR_SPEED_RAW,
+    C_ACCEL_DECEL_MS,
     JOG_STEP_DEG,
     ABSOLUTE_LIMIT_DEG,
     GAMMA_PUU_PER_DEGREE,
@@ -236,6 +238,41 @@ class MotionController:
                     "during this commissioning test."
                 )
 
+    def configure_motion_profile(
+        self,
+        axis: Axis,
+    ) -> None:
+        """Apply only the commissioning profile intentionally selected per axis."""
+
+        if axis.slave_id != C_ID:
+            return
+
+        current = self.modbus.read_u16(
+            axis.slave_id,
+            P5_20,
+        )
+
+        if current == C_ACCEL_DECEL_MS:
+            return
+
+        self.modbus.write_u16(
+            axis.slave_id,
+            P5_20,
+            C_ACCEL_DECEL_MS,
+        )
+
+        readback = self.modbus.read_u16(
+            axis.slave_id,
+            P5_20,
+        )
+
+        if readback != C_ACCEL_DECEL_MS:
+            raise RuntimeError(
+                f"{axis.name}: P5-20 verification failed. "
+                f"Read {readback} ms, "
+                f"expected {C_ACCEL_DECEL_MS} ms."
+            )
+
     # ========================================================
     # Jog
     # ========================================================
@@ -254,6 +291,7 @@ class MotionController:
 
         self.verify_axis(axis)
         self.verify_servo_selection(axis)
+        self.configure_motion_profile(axis)
 
         feedback = self.modbus.read_s32(
             axis.slave_id,
