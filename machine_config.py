@@ -6,7 +6,7 @@
 PORT = "COM4"
 BAUD_RATE = 38400
 
-SERIAL_TIMEOUT = 0.5
+SERIAL_TIMEOUT = 1.0
 
 GAMMA_ID = 1
 C_ID = 2
@@ -24,6 +24,11 @@ P0_46 = 0x005C       # Servo status
 P1_01 = 0x0102       # Control mode
 P2_30 = 0x023C       # Simulation / related configuration
 
+P5_07 = 0x050E       # Execute PR#1
+P5_60 = 0x0578       # Speed slot 0
+P6_02 = 0x0604       # PR#1 control
+P6_03 = 0x0606       # Relative PR position
+
 
 # ------------------------------------------------------------
 # Servo status bits
@@ -31,6 +36,12 @@ P2_30 = 0x023C       # Simulation / related configuration
 # ------------------------------------------------------------
 
 SON_BIT = 0x0002
+
+PR_CONTROL_WORD = 0x00000042
+PR_SPEED_RAW = 50            # 5.0 rpm
+
+JOG_STEP_DEG = 0.1
+ABSOLUTE_LIMIT_DEG = 5.0
 
 
 # ------------------------------------------------------------
@@ -81,7 +92,7 @@ C_SIGN = +1
 # GUI
 # ------------------------------------------------------------
 
-REFRESH_INTERVAL_MS = 500
+REFRESH_INTERVAL_MS = 1000
 
 APP_NAME = "Lumigon"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"

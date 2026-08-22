@@ -130,10 +130,10 @@ class DeltaModbus:
     # ========================================================
 
     def read_registers(
-        self,
-        slave_id: int,
-        address: int,
-        count: int,
+            self,
+            slave_id: int,
+            address: int,
+            count: int,
     ) -> list[int]:
 
         if not self.is_connected:
@@ -151,77 +151,88 @@ class DeltaModbus:
 
         request = self.add_crc(body)
 
-        self.ser.reset_input_buffer()
+        expected_length = 5 + count * 2
 
-        self.ser.write(request)
-        self.ser.flush()
+        last_error = None
 
-        expected_length = (
-            5
-            + count * 2
+        for attempt in range(3):
+
+            try:
+                self.ser.reset_input_buffer()
+
+                self.ser.write(request)
+                self.ser.flush()
+
+                # ASDA-A2 / USB-RS485 settling time
+                time.sleep(0.03)
+
+                response = self.ser.read(
+                    expected_length
+                )
+
+                if len(response) != expected_length:
+                    raise DeltaModbusError(
+                        f"S{slave_id}: incomplete response "
+                        f"reading 0x{address:04X} "
+                        f"({len(response)}/{expected_length} bytes)"
+                    )
+
+                self.validate_crc(response)
+
+                if response[0] != slave_id:
+                    raise DeltaModbusError(
+                        f"Unexpected slave ID: "
+                        f"{response[0]}"
+                    )
+
+                function = response[1]
+
+                if function == 0x83:
+                    raise DeltaModbusError(
+                        f"S{slave_id}: Modbus exception "
+                        f"0x{response[2]:02X}"
+                    )
+
+                if function != 0x03:
+                    raise DeltaModbusError(
+                        "Unexpected Modbus function: "
+                        f"0x{function:02X}"
+                    )
+
+                if response[2] != count * 2:
+                    raise DeltaModbusError(
+                        "Unexpected byte count: "
+                        f"{response[2]}"
+                    )
+
+                return [
+                    int.from_bytes(
+                        response[
+                            3 + 2 * i:
+                            5 + 2 * i
+                        ],
+                        byteorder="big",
+                        signed=False,
+                    )
+                    for i in range(count)
+                ]
+
+            except (
+                    DeltaModbusError,
+                    serial.SerialException,
+            ) as exc:
+
+                last_error = exc
+
+                if attempt < 2:
+                    time.sleep(0.08)
+
+        raise DeltaModbusError(
+            f"S{slave_id}: communication failed "
+            f"after 3 attempts reading "
+            f"0x{address:04X}. "
+            f"Last error: {last_error}"
         )
-
-        response = self.ser.read(
-            expected_length
-        )
-
-        if not response:
-            raise DeltaModbusError(
-                f"S{slave_id}: no response "
-                f"reading 0x{address:04X}"
-            )
-
-        self.validate_crc(response)
-
-        if response[0] != slave_id:
-            raise DeltaModbusError(
-                "Unexpected slave ID: "
-                f"{response[0]}"
-            )
-
-        function = response[1]
-
-        if function == 0x83:
-            exception_code = response[2]
-
-            raise DeltaModbusError(
-                f"S{slave_id}: Modbus "
-                f"exception 0x{exception_code:02X}"
-            )
-
-        if function != 0x03:
-            raise DeltaModbusError(
-                "Unexpected Modbus function: "
-                f"0x{function:02X}"
-            )
-
-        byte_count = response[2]
-
-        expected_byte_count = (
-            count * 2
-        )
-
-        if byte_count != expected_byte_count:
-            raise DeltaModbusError(
-                "Unexpected byte count: "
-                f"{byte_count}"
-            )
-
-        registers = []
-
-        for i in range(count):
-            start = 3 + i * 2
-            end = start + 2
-
-            value = int.from_bytes(
-                response[start:end],
-                byteorder="big",
-                signed=False,
-            )
-
-            registers.append(value)
-
-        return registers
 
     # ========================================================
     # Typed reads
@@ -273,3 +284,109 @@ class DeltaModbus:
             value -= 0x100000000
 
         return value
+
+    # ========================================================
+    # Controlled writes - HMI v0.2
+    # ========================================================
+
+    def write_s32(
+        self,
+        slave_id: int,
+        address: int,
+        value: int,
+    ) -> None:
+
+        if not self.is_connected:
+            raise DeltaModbusError(
+                "Serial port is not connected."
+            )
+
+        raw = value & 0xFFFFFFFF
+
+        low_word = raw & 0xFFFF
+        high_word = (raw >> 16) & 0xFFFF
+
+        body = struct.pack(
+            ">BBHHBHH",
+            slave_id,
+            0x10,
+            address,
+            2,
+            4,
+            low_word,
+            high_word,
+        )
+
+        request = self.add_crc(body)
+
+        self.ser.reset_input_buffer()
+        self.ser.write(request)
+        self.ser.flush()
+
+        response = self.ser.read(8)
+
+        if not response:
+            raise DeltaModbusError(
+                f"S{slave_id}: no response "
+                f"writing 0x{address:04X}"
+            )
+
+        self.validate_crc(response)
+
+        if response[0] != slave_id:
+            raise DeltaModbusError(
+                "Unexpected slave ID in write response."
+            )
+
+        if response[1] == 0x90:
+            raise DeltaModbusError(
+                f"S{slave_id}: Modbus write exception "
+                f"0x{response[2]:02X}"
+            )
+
+        if response[1] != 0x10:
+            raise DeltaModbusError(
+                "Unexpected write function: "
+                f"0x{response[1]:02X}"
+            )
+
+    def write_u16(
+        self,
+        slave_id: int,
+        address: int,
+        value: int,
+    ) -> None:
+
+        if not self.is_connected:
+            raise DeltaModbusError(
+                "Serial port is not connected."
+            )
+
+        body = struct.pack(
+            ">BBHH",
+            slave_id,
+            0x06,
+            address,
+            value & 0xFFFF,
+        )
+
+        request = self.add_crc(body)
+
+        self.ser.reset_input_buffer()
+        self.ser.write(request)
+        self.ser.flush()
+
+        response = self.ser.read(8)
+
+        if not response:
+            raise DeltaModbusError(
+                f"S{slave_id}: no response "
+                f"writing 0x{address:04X}"
+            )
+
+        self.validate_crc(response)
+
+        if response != request:
+            raise DeltaModbusError(
+                "Write echo mismatch."
+            )

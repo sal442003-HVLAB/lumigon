@@ -1,4 +1,16 @@
+from motion_controller import (
+    MotionController,
+    GAMMA,
+    C_AXIS,
+)
+
+from machine_config import (
+    JOG_STEP_DEG,
+)
+
 import serial
+
+
 from PySide6.QtCore import (
     QTimer,
     Qt,
@@ -56,6 +68,14 @@ class AxisPanel(QGroupBox):
         self.status_label = QLabel("—")
         self.son_label = QLabel("—")
         self.monitor_label = QLabel("—")
+
+        self.jog_minus_button = QPushButton(
+            "-0.1°"
+        )
+
+        self.jog_plus_button = QPushButton(
+            "+0.1°"
+        )
 
         layout.addWidget(
             QLabel("Feedback position:"),
@@ -123,6 +143,18 @@ class AxisPanel(QGroupBox):
             1,
         )
 
+        layout.addWidget(
+            self.jog_minus_button,
+            6,
+            0,
+        )
+
+        layout.addWidget(
+            self.jog_plus_button,
+            6,
+            1,
+        )
+
         self.setLayout(layout)
 
 
@@ -142,6 +174,9 @@ class MainWindow(QMainWindow):
 
         self.modbus = DeltaModbus(
             PORT
+        )
+        self.motion = MotionController(
+            self.modbus
         )
 
         self.gamma_zero_puu = None
@@ -287,7 +322,33 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(
             axis_layout
         )
+        self.gamma_panel.jog_minus_button.clicked.connect(
+            lambda: self.jog_axis(
+                GAMMA,
+                -JOG_STEP_DEG,
+            )
+        )
 
+        self.gamma_panel.jog_plus_button.clicked.connect(
+            lambda: self.jog_axis(
+                GAMMA,
+                +JOG_STEP_DEG,
+            )
+        )
+
+        self.c_panel.jog_minus_button.clicked.connect(
+            lambda: self.jog_axis(
+                C_AXIS,
+                -JOG_STEP_DEG,
+            )
+        )
+
+        self.c_panel.jog_plus_button.clicked.connect(
+            lambda: self.jog_axis(
+                C_AXIS,
+                +JOG_STEP_DEG,
+            )
+        )
         # ----------------------------------------------------
         # Zero controls
         # ----------------------------------------------------
@@ -325,9 +386,8 @@ class MainWindow(QMainWindow):
         # ----------------------------------------------------
 
         notice = QLabel(
-            "HMI v0.1 — READ ONLY — "
-            "No Servo ON, no PR trigger, "
-            "no Modbus write commands."
+            "HMI v0.2 — Commissioning Mode — "
+        "Only ±0.1° jog commands are permitted."
         )
 
         notice.setAlignment(
@@ -690,6 +750,11 @@ class MainWindow(QMainWindow):
                 f"C={self.c_zero_puu:+d} PUU"
             )
 
+            self.motion.set_session_zero(
+                self.gamma_zero_puu,
+                self.c_zero_puu,
+            )
+
             self.refresh_data()
 
         except Exception as exc:
@@ -698,6 +763,74 @@ class MainWindow(QMainWindow):
                 "Zero Capture Error",
                 str(exc),
             )
+
+    def jog_axis(
+            self,
+            axis,
+            delta_degree,
+    ):
+
+        if not self.modbus.is_connected:
+            QMessageBox.warning(
+                self,
+                "Not Connected",
+                "Connect to the drives first.",
+            )
+            return
+
+        if (
+                self.gamma_zero_puu is None
+                or self.c_zero_puu is None
+        ):
+            QMessageBox.warning(
+                self,
+                "Session Zero Required",
+                "Capture Session Zero before movement.",
+            )
+            return
+
+        direction = (
+            "+"
+            if delta_degree > 0
+            else "-"
+        )
+
+        answer = QMessageBox.question(
+            self,
+            "Confirm Limited Jog",
+            f"{axis.name}: move "
+            f"{direction}0.1°?\n\n"
+            "Keep the physical E-STOP accessible.",
+            QMessageBox.Yes
+            | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if answer != QMessageBox.Yes:
+            return
+
+        self.timer.stop()
+
+        try:
+            self.motion.jog(
+                axis,
+                delta_degree,
+            )
+
+            QTimer.singleShot(
+                500,
+                self.refresh_data,
+            )
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Movement Blocked",
+                str(exc),
+            )
+
+        finally:
+            self.timer.start()
 
     # ========================================================
     # Close
