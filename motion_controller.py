@@ -13,6 +13,7 @@ from machine_config import (
     P0_17,
     P0_46,
     P1_01,
+    P1_36,
     P2_30,
     P5_07,
     P5_20,
@@ -23,6 +24,7 @@ from machine_config import (
     PR_CONTROL_WORD,
     PR_SPEED_RAW,
     C_ACCEL_DECEL_MS,
+    C_S_CURVE_MS,
     JOG_STEP_DEG,
     ABSOLUTE_LIMIT_DEG,
     GAMMA_PUU_PER_DEGREE,
@@ -247,31 +249,53 @@ class MotionController:
         if axis.slave_id != C_ID:
             return
 
-        current = self.modbus.read_u16(
+        current_accel_decel = self.modbus.read_u16(
             axis.slave_id,
             P5_20,
         )
 
-        if current == C_ACCEL_DECEL_MS:
-            return
-
-        self.modbus.write_u16(
-            axis.slave_id,
-            P5_20,
-            C_ACCEL_DECEL_MS,
-        )
-
-        readback = self.modbus.read_u16(
-            axis.slave_id,
-            P5_20,
-        )
-
-        if readback != C_ACCEL_DECEL_MS:
-            raise RuntimeError(
-                f"{axis.name}: P5-20 verification failed. "
-                f"Read {readback} ms, "
-                f"expected {C_ACCEL_DECEL_MS} ms."
+        if current_accel_decel != C_ACCEL_DECEL_MS:
+            self.modbus.write_u16(
+                axis.slave_id,
+                P5_20,
+                C_ACCEL_DECEL_MS,
             )
+
+            readback = self.modbus.read_u16(
+                axis.slave_id,
+                P5_20,
+            )
+
+            if readback != C_ACCEL_DECEL_MS:
+                raise RuntimeError(
+                    f"{axis.name}: P5-20 verification failed. "
+                    f"Read {readback} ms, "
+                    f"expected {C_ACCEL_DECEL_MS} ms."
+                )
+
+        current_s_curve = self.modbus.read_u16(
+            axis.slave_id,
+            P1_36,
+        )
+
+        if current_s_curve != C_S_CURVE_MS:
+            self.modbus.write_u16(
+                axis.slave_id,
+                P1_36,
+                C_S_CURVE_MS,
+            )
+
+            readback = self.modbus.read_u16(
+                axis.slave_id,
+                P1_36,
+            )
+
+            if readback != C_S_CURVE_MS:
+                raise RuntimeError(
+                    f"{axis.name}: P1-36 verification failed. "
+                    f"Read {readback} ms, "
+                    f"expected {C_S_CURVE_MS} ms."
+                )
 
     # ========================================================
     # Jog
