@@ -20,6 +20,7 @@ P1_36 = 0x0148       # PR S-curve smoothing time (ms)
 P2_30 = 0x023C
 
 P5_07 = 0x050E
+P5_20 = 0x0528       # PR accel/decel slot 0 (ms)
 P5_60 = 0x0578
 
 P6_02 = 0x0604
@@ -33,6 +34,13 @@ PR_SPEED_RAW = 50
 # Axis-specific S-curve tuning.
 EXPECTED_GAMMA_SCURVE_MS = 200
 EXPECTED_C_SCURVE_MS = 400
+
+# C-axis profile tuning controls shown in the commissioning HMI.
+C_PROFILE_MIN_MS = 100
+C_PROFILE_MAX_MS = 3000
+C_PROFILE_STEP_MS = 100
+C_RAMP_DEFAULT_MS = 2000
+C_SCURVE_DEFAULT_MS = 100
 
 JOG_STEP_DEG = 0.1
 
