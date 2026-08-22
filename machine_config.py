@@ -40,12 +40,14 @@ P6_03 = 0x0606       # Relative PR position
 SON_BIT = 0x0002
 
 PR_CONTROL_WORD = 0x00000042
-PR_SPEED_RAW = 50            # 5.0 rpm
+GAMMA_PR_SPEED_RAW = 50      # 5.0 rpm
+C_PR_SPEED_RAW = 30          # 3.0 rpm commissioning test
 
 # C-axis commissioning profile:
 # P5-20 is a shared acceleration/deceleration time in PR mode.
-# Keep the ramp that already gave a good start, and use a mild
-# position-command S-curve to reduce jerk at the end of motion.
+# Keep the ramp that already gave a good start, use a mild
+# position-command S-curve, and temporarily lower C speed to
+# isolate whether the stop vibration is speed/inertia related.
 C_ACCEL_DECEL_MS = 500
 C_S_CURVE_MS = 100
 
