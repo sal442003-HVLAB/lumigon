@@ -20,7 +20,8 @@ from machine_config import (
     SON_BIT,
     PR_CONTROL_WORD,
     PR_SPEED_RAW,
-    EXPECTED_SCURVE_MS,
+    EXPECTED_GAMMA_SCURVE_MS,
+    EXPECTED_C_SCURVE_MS,
     JOG_STEP_DEG,
     ABSOLUTE_LIMIT_DEG,
     MAX_MOVE_PER_COMMAND_DEG,
@@ -99,6 +100,12 @@ class MotionController:
     def read_scurve(self, axis: Axis) -> int:
         return self.modbus.read_u16(axis.slave_id, P1_36)
 
+    @staticmethod
+    def expected_scurve(axis: Axis) -> int:
+        if axis.slave_id == GAMMA_ID:
+            return EXPECTED_GAMMA_SCURVE_MS
+        return EXPECTED_C_SCURVE_MS
+
     def verify_axis(self, axis: Axis):
         alarm = self.modbus.read_u16(axis.slave_id, P0_01)
         if alarm != 0:
@@ -130,10 +137,11 @@ class MotionController:
             )
 
         scurve = self.modbus.read_u16(axis.slave_id, P1_36)
-        if scurve != EXPECTED_SCURVE_MS:
+        expected_scurve = self.expected_scurve(axis)
+        if scurve != expected_scurve:
             raise RuntimeError(
                 f"{axis.name}: P1-36 S-curve is {scurve} ms, "
-                f"expected {EXPECTED_SCURVE_MS} ms. Motion blocked."
+                f"expected {expected_scurve} ms. Motion blocked."
             )
 
         control = self.modbus.read_u32(axis.slave_id, P6_02)
