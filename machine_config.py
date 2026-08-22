@@ -21,7 +21,7 @@ P2_30 = 0x023C
 
 P5_07 = 0x050E
 P5_20 = 0x0528       # PR accel/decel slot 0 (ms)
-P5_60 = 0x0578
+P5_60 = 0x0578       # PR speed slot 0 (0.1 rpm)
 
 P6_02 = 0x0604
 P6_03 = 0x0606
@@ -29,7 +29,7 @@ P6_03 = 0x0606
 SON_BIT = 0x0002
 
 PR_CONTROL_WORD = 0x00000042
-PR_SPEED_RAW = 50
+PR_SPEED_RAW = 50            # Gamma/default = 5.0 rpm
 
 # Axis-specific S-curve tuning.
 EXPECTED_GAMMA_SCURVE_MS = 200
@@ -41,6 +41,12 @@ C_PROFILE_MAX_MS = 3000
 C_PROFILE_STEP_MS = 100
 C_RAMP_DEFAULT_MS = 2000
 C_SCURVE_DEFAULT_MS = 100
+
+# C-axis speed tuning control. P5-60 uses 0.1 rpm units.
+C_SPEED_MIN_RPM = 0.5
+C_SPEED_MAX_RPM = 15.0
+C_SPEED_STEP_RPM = 0.5
+C_SPEED_DEFAULT_RPM = 5.0
 
 JOG_STEP_DEG = 0.1
 
