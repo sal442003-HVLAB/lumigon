@@ -40,7 +40,7 @@ SON_BIT = 0x0002
 
 PR_CONTROL_WORD = 0x00000042
 PR_SPEED_RAW = 50            # 5.0 rpm
-C_ACCEL_DECEL_MS = 500       # Commissioning test: softer C-axis ramp
+C_ACCEL_DECEL_MS = 800       # Commissioning test: softer C-axis ramp
 
 JOG_STEP_DEG = 0.1
 ABSOLUTE_LIMIT_DEG = 5.0
