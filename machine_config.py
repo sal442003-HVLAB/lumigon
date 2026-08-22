@@ -22,6 +22,7 @@ P0_17 = 0x0022       # Monitor selection
 P0_46 = 0x005C       # Servo status
 
 P1_01 = 0x0102       # Control mode
+P1_36 = 0x0148       # Position-command S-curve smoothing time (ms)
 P2_30 = 0x023C       # Simulation / related configuration
 
 P5_07 = 0x050E       # Execute PR#1
@@ -40,7 +41,13 @@ SON_BIT = 0x0002
 
 PR_CONTROL_WORD = 0x00000042
 PR_SPEED_RAW = 50            # 5.0 rpm
-C_ACCEL_DECEL_MS = 800       # Commissioning test: softer C-axis ramp
+
+# C-axis commissioning profile:
+# P5-20 is a shared acceleration/deceleration time in PR mode.
+# Keep the ramp that already gave a good start, and use a mild
+# position-command S-curve to reduce jerk at the end of motion.
+C_ACCEL_DECEL_MS = 500
+C_S_CURVE_MS = 100
 
 JOG_STEP_DEG = 0.1
 ABSOLUTE_LIMIT_DEG = 5.0
