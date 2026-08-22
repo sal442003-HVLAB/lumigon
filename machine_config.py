@@ -43,12 +43,13 @@ PR_CONTROL_WORD = 0x00000042
 GAMMA_PR_SPEED_RAW = 50      # 5.0 rpm
 C_PR_SPEED_RAW = 30          # 3.0 rpm commissioning test
 
-# C-axis commissioning profile:
-# P5-20 is a shared acceleration/deceleration time in PR mode.
-# Keep the current C speed and S-curve unchanged while testing
-# a longer shared ramp to evaluate stop behavior in isolation.
+# C-axis commissioning profile. These are startup/default values;
+# the HMI can change Ramp and S-curve in 100 ms increments.
 C_ACCEL_DECEL_MS = 2000
 C_S_CURVE_MS = 100
+C_PROFILE_MIN_MS = 100
+C_PROFILE_MAX_MS = 3000
+C_PROFILE_STEP_MS = 100
 
 JOG_STEP_DEG = 0.1
 ABSOLUTE_LIMIT_DEG = 5.0
