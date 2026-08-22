@@ -45,10 +45,9 @@ C_PR_SPEED_RAW = 30          # 3.0 rpm commissioning test
 
 # C-axis commissioning profile:
 # P5-20 is a shared acceleration/deceleration time in PR mode.
-# Keep the ramp that already gave a good start, use a mild
-# position-command S-curve, and temporarily lower C speed to
-# isolate whether the stop vibration is speed/inertia related.
-C_ACCEL_DECEL_MS = 500
+# Keep the current C speed and S-curve unchanged while testing
+# a longer shared ramp to evaluate stop behavior in isolation.
+C_ACCEL_DECEL_MS = 1000
 C_S_CURVE_MS = 100
 
 JOG_STEP_DEG = 0.1
