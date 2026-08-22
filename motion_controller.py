@@ -68,6 +68,7 @@ class MotionController:
         self.modbus = modbus
         self.gamma_zero_puu = None
         self.c_zero_puu = None
+        self.c_expected_scurve_ms = EXPECTED_C_SCURVE_MS
 
     def set_session_zero(self, gamma_zero_puu: int, c_zero_puu: int):
         self.gamma_zero_puu = gamma_zero_puu
@@ -100,11 +101,10 @@ class MotionController:
     def read_scurve(self, axis: Axis) -> int:
         return self.modbus.read_u16(axis.slave_id, P1_36)
 
-    @staticmethod
-    def expected_scurve(axis: Axis) -> int:
+    def expected_scurve(self, axis: Axis) -> int:
         if axis.slave_id == GAMMA_ID:
             return EXPECTED_GAMMA_SCURVE_MS
-        return EXPECTED_C_SCURVE_MS
+        return self.c_expected_scurve_ms
 
     def verify_axis(self, axis: Axis):
         alarm = self.modbus.read_u16(axis.slave_id, P0_01)
