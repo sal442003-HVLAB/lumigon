@@ -1,6 +1,6 @@
 # ============================================================
 # Lumigon - Machine Configuration
-# HMI v0.3
+# HMI v0.3.1
 # ============================================================
 
 PORT = "COM4"
@@ -16,6 +16,7 @@ P0_17 = 0x0022
 P0_46 = 0x005C
 
 P1_01 = 0x0102
+P1_36 = 0x0148       # PR S-curve smoothing time (ms)
 P2_30 = 0x023C
 
 P5_07 = 0x050E
@@ -28,6 +29,7 @@ SON_BIT = 0x0002
 
 PR_CONTROL_WORD = 0x00000042
 PR_SPEED_RAW = 50
+EXPECTED_SCURVE_MS = 200
 
 JOG_STEP_DEG = 0.1
 
@@ -63,4 +65,4 @@ C_TOLERANCE_PUU = 30
 REFRESH_INTERVAL_MS = 1000
 
 APP_NAME = "Lumigon"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
