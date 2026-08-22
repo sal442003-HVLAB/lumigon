@@ -47,7 +47,7 @@ C_PR_SPEED_RAW = 30          # 3.0 rpm commissioning test
 # P5-20 is a shared acceleration/deceleration time in PR mode.
 # Keep the current C speed and S-curve unchanged while testing
 # a longer shared ramp to evaluate stop behavior in isolation.
-C_ACCEL_DECEL_MS = 1000
+C_ACCEL_DECEL_MS = 2000
 C_S_CURVE_MS = 100
 
 JOG_STEP_DEG = 0.1
