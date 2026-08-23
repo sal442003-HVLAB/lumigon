@@ -1,11 +1,11 @@
 """Driver for the Czibula & Grundmann Ph-Amp MB7 photometer amplifier.
 
 The Lumigon integration intentionally reads photocurrent (F0) and performs the
-lux conversion in software.  This keeps the photometer-head sensitivity visible
+lux conversion in software. This keeps the photometer-head sensitivity visible
 and version-controlled instead of relying on the amplifier's EEPROM calibration
 factor.
 
-The tested hardware currently answers as firmware V1.22.  That firmware does
+The tested hardware currently answers as firmware V1.22. That firmware does
 not necessarily acknowledge setting commands, so this driver verifies settings
 with read-back queries rather than depending on an ``OK`` response.
 """
@@ -106,8 +106,9 @@ class PhAmpMB7:
             self._serial = None
             raise PhAmpError(f"Could not open {self.port}: {exc}") from exc
 
-        # Bluetooth SPP may need a short settling period after the COM port opens.
-        time.sleep(0.25)
+        # Bluetooth SPP can need a little time after COM open before the serial
+        # path is fully settled. The identification query is also our link test.
+        time.sleep(0.40)
         self._serial.reset_input_buffer()
 
         try:
@@ -146,7 +147,7 @@ class PhAmpMB7:
         except serial.SerialException as exc:
             raise PhAmpError(f"Serial write failed for {command!r}: {exc}") from exc
 
-    def _query(self, command: str) -> str:
+    def _query_once(self, command: str) -> str:
         ser = self._require_serial()
         ser.reset_input_buffer()
         self._write_command(command)
@@ -163,28 +164,55 @@ class PhAmpMB7:
             raise PhAmpProtocolError(f"Empty response to {command!r}")
         return response
 
+    def _query(self, command: str, *, attempts: int = 1, retry_delay_s: float = 0.10) -> str:
+        """Query the device, optionally retrying transient no-response cases.
+
+        The Bluetooth SPP link and this older V1.22 firmware can occasionally
+        miss the first parameter query immediately after a setting command.
+        Measurement queries remain single-shot unless a caller explicitly asks
+        for retries.
+        """
+        if attempts < 1:
+            raise ValueError("attempts must be at least 1")
+
+        last_error: Optional[PhAmpProtocolError] = None
+        for attempt in range(attempts):
+            try:
+                return self._query_once(command)
+            except PhAmpProtocolError as exc:
+                last_error = exc
+                if attempt + 1 < attempts:
+                    time.sleep(retry_delay_s)
+
+        assert last_error is not None
+        raise last_error
+
     def _set_and_verify(
         self,
         set_command: str,
         query_command: str,
         expected: str,
     ) -> str:
-        """Set a V1-compatible parameter and verify it using a read-back query.
+        """Set a V1-compatible parameter and verify it using read-back.
 
-        V1 firmware may not acknowledge setting commands.  We therefore send
-        the command, wait briefly, clear any optional acknowledgement, and use
-        the query command as the source of truth.
+        V1.22 often sends no acknowledgement for setting commands. Allow enough
+        processing time, discard an acknowledgement only when one is actually
+        present, then retry the read-back query to tolerate a transient missed
+        response over Bluetooth SPP.
         """
         ser = self._require_serial()
         ser.reset_input_buffer()
         self._write_command(set_command)
-        time.sleep(0.03)
+        time.sleep(0.10)
 
-        # Discard an optional V2-style acknowledgement if one was produced.
         if ser.in_waiting:
             ser.readline()
 
-        actual = self._query(query_command)
+        actual = self._query(
+            query_command,
+            attempts=3,
+            retry_delay_s=0.15,
+        )
         if actual.strip().upper() != expected.strip().upper():
             raise PhAmpProtocolError(
                 f"Verification failed for {set_command!r}: "
@@ -193,16 +221,16 @@ class PhAmpMB7:
         return actual
 
     def get_version(self) -> str:
-        return self._query("V?")
+        return self._query("V?", attempts=2, retry_delay_s=0.15)
 
     def get_serial_number(self) -> str:
-        return self._query("SN?")
+        return self._query("SN?", attempts=2, retry_delay_s=0.15)
 
     def configure_for_lumigon(self) -> None:
         """Configure volatile measurement parameters used by Lumigon.
 
         No SAVE, E calibration-factor write, EEPROM clear, or reset command is
-        issued here.  The hardware calibration factor remains untouched.
+        issued here. The hardware calibration factor remains untouched.
         """
         self.set_format_photocurrent()
         self.set_software_trigger()
