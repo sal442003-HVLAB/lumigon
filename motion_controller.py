@@ -19,9 +19,10 @@ from machine_config import (
     P6_03,
     SON_BIT,
     PR_CONTROL_WORD,
-    PR_SPEED_RAW,
-    EXPECTED_GAMMA_SCURVE_MS,
-    EXPECTED_C_SCURVE_MS,
+    GAMMA_SPEED_DEFAULT_RPM,
+    C_SPEED_DEFAULT_RPM,
+    GAMMA_SCURVE_DEFAULT_MS,
+    C_SCURVE_DEFAULT_MS,
     JOG_STEP_DEG,
     ABSOLUTE_LIMIT_DEG,
     MAX_RELATIVE_MOVE_DEG,
@@ -68,12 +69,23 @@ class MotionController:
         self.modbus = modbus
         self.gamma_zero_puu = None
         self.c_zero_puu = None
-        self.c_expected_scurve_ms = EXPECTED_C_SCURVE_MS
-        self.c_expected_speed_raw = PR_SPEED_RAW
+
+        self.gamma_expected_speed_raw = round(GAMMA_SPEED_DEFAULT_RPM * 10.0)
+        self.c_expected_speed_raw = round(C_SPEED_DEFAULT_RPM * 10.0)
+        self.gamma_expected_scurve_ms = GAMMA_SCURVE_DEFAULT_MS
+        self.c_expected_scurve_ms = C_SCURVE_DEFAULT_MS
 
     def set_session_zero(self, gamma_zero_puu: int, c_zero_puu: int):
         self.gamma_zero_puu = gamma_zero_puu
         self.c_zero_puu = c_zero_puu
+
+    def set_expected_profile(self, axis: Axis, speed_raw: int, scurve_ms: int):
+        if axis.slave_id == GAMMA_ID:
+            self.gamma_expected_speed_raw = speed_raw
+            self.gamma_expected_scurve_ms = scurve_ms
+        else:
+            self.c_expected_speed_raw = speed_raw
+            self.c_expected_scurve_ms = scurve_ms
 
     @staticmethod
     def degree_to_puu(axis: Axis, degree: float) -> int:
@@ -99,17 +111,14 @@ class MotionController:
         feedback = self.modbus.read_s32(axis.slave_id, P0_09)
         return self.puu_to_degree(axis, feedback - self.get_zero(axis))
 
-    def read_scurve(self, axis: Axis) -> int:
-        return self.modbus.read_u16(axis.slave_id, P1_36)
-
     def expected_scurve(self, axis: Axis) -> int:
         if axis.slave_id == GAMMA_ID:
-            return EXPECTED_GAMMA_SCURVE_MS
+            return self.gamma_expected_scurve_ms
         return self.c_expected_scurve_ms
 
     def expected_speed_raw(self, axis: Axis) -> int:
         if axis.slave_id == GAMMA_ID:
-            return PR_SPEED_RAW
+            return self.gamma_expected_speed_raw
         return self.c_expected_speed_raw
 
     def verify_axis(self, axis: Axis):
