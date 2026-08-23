@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QApplication
 
 from main_window import MainWindow
 from axis_profile_controls import attach_axis_profile_controls
+from luxmeter_controls import attach_luxmeter_controls
 
 from machine_config import (
     APP_NAME,
@@ -26,6 +27,7 @@ def main():
 
     window = MainWindow()
     attach_axis_profile_controls(window)
+    attach_luxmeter_controls(window)
 
     window.show()
 
