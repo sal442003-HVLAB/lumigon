@@ -27,26 +27,42 @@ P6_02 = 0x0604
 P6_03 = 0x0606
 
 SON_BIT = 0x0002
-
 PR_CONTROL_WORD = 0x00000042
-PR_SPEED_RAW = 50            # Gamma/default = 5.0 rpm
 
-# Axis-specific S-curve tuning.
-EXPECTED_GAMMA_SCURVE_MS = 200
-EXPECTED_C_SCURVE_MS = 400
+# ------------------------------------------------------------
+# Per-axis commissioning motion profiles
+# ------------------------------------------------------------
+# These are HMI defaults only. Opening Lumigon does not write them
+# to either drive; the operator must press Apply for the selected axis.
 
-# C-axis profile tuning controls shown in the commissioning HMI.
-C_PROFILE_MIN_MS = 100
-C_PROFILE_MAX_MS = 3000
-C_PROFILE_STEP_MS = 100
-C_RAMP_DEFAULT_MS = 2000
-C_SCURVE_DEFAULT_MS = 100
+PROFILE_MIN_MS = 100
+PROFILE_MAX_MS = 3000
+PROFILE_STEP_MS = 100
 
-# C-axis speed tuning control. P5-60 uses 0.1 rpm units.
-C_SPEED_MIN_RPM = 0.5
-C_SPEED_MAX_RPM = 15.0
-C_SPEED_STEP_RPM = 0.5
+SPEED_MIN_RPM = 0.5
+SPEED_MAX_RPM = 15.0
+SPEED_STEP_RPM = 0.5
+
+# Gamma baseline / previous commissioning values.
+GAMMA_SPEED_DEFAULT_RPM = 5.0
+GAMMA_RAMP_DEFAULT_MS = 200
+GAMMA_SCURVE_DEFAULT_MS = 200
+
+# C baseline selected during commissioning on 2026-08-23.
 C_SPEED_DEFAULT_RPM = 5.0
+C_RAMP_DEFAULT_MS = 300
+C_SCURVE_DEFAULT_MS = 2000
+
+# Legacy aliases retained while older helper scripts still exist.
+PR_SPEED_RAW = round(GAMMA_SPEED_DEFAULT_RPM * 10.0)
+EXPECTED_GAMMA_SCURVE_MS = GAMMA_SCURVE_DEFAULT_MS
+EXPECTED_C_SCURVE_MS = C_SCURVE_DEFAULT_MS
+C_PROFILE_MIN_MS = PROFILE_MIN_MS
+C_PROFILE_MAX_MS = PROFILE_MAX_MS
+C_PROFILE_STEP_MS = PROFILE_STEP_MS
+C_SPEED_MIN_RPM = SPEED_MIN_RPM
+C_SPEED_MAX_RPM = SPEED_MAX_RPM
+C_SPEED_STEP_RPM = SPEED_STEP_RPM
 
 JOG_STEP_DEG = 0.1
 
@@ -59,8 +75,6 @@ ABSOLUTE_LIMIT_DEG = 15.0
 # resulting absolute target before issuing the command.
 MAX_RELATIVE_MOVE_DEG = 2.0 * ABSOLUTE_LIMIT_DEG
 
-# At 5 rpm motor speed and the installed gear ratios, a full legal
-# -15° -> +15° move can take around 15-20 seconds. Keep margin here.
 MOVE_TIMEOUT_SECONDS = 30.0
 MOTION_POLL_INTERVAL_SECONDS = 0.05
 
