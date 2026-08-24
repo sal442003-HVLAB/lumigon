@@ -92,17 +92,25 @@ def organize_main_window_tabs(window):
 
     header_item = None
     communication_item = None
-    motor_items = []
+    axis_controls_item = None
+    gamma_profile_item = None
+    c_profile_item = None
+    zero_item = None
+    notice_item = None
     measurement_items = []
     unclassified_items = []
 
     connection_label = getattr(window, "connection_label", None)
+    gamma_panel = getattr(window, "gamma_panel", None)
+    c_panel = getattr(window, "c_panel", None)
+    zero_button = getattr(window, "zero_button", None)
+    gamma_profile_box = getattr(window, "gamma_profile_box", None)
+    c_profile_box = getattr(window, "c_profile_box", None)
 
     for item in original_items:
         widget = item.widget()
         layout = item.layout()
 
-        # Original header is the row that contains the application title/status.
         if layout is not None and _layout_contains_widget(layout, connection_label):
             header_item = item
             continue
@@ -111,36 +119,37 @@ def organize_main_window_tabs(window):
             measurement_items.append(item)
             continue
 
-        if widget in {
-            getattr(window, "gamma_profile_box", None),
-            getattr(window, "c_profile_box", None),
-        }:
-            motor_items.append(item)
+        if widget is gamma_profile_box:
+            gamma_profile_item = item
+            continue
+
+        if widget is c_profile_box:
+            c_profile_item = item
             continue
 
         if widget is not None and getattr(widget, "title", lambda: "")() == "Communication":
             communication_item = item
-            motor_items.append(item)
             continue
 
         if layout is not None and (
-            _layout_contains_widget(layout, getattr(window, "gamma_panel", None))
-            or _layout_contains_widget(layout, getattr(window, "c_panel", None))
-            or _layout_contains_widget(layout, getattr(window, "zero_button", None))
+            _layout_contains_widget(layout, gamma_panel)
+            or _layout_contains_widget(layout, c_panel)
         ):
-            motor_items.append(item)
+            axis_controls_item = item
+            continue
+
+        if layout is not None and _layout_contains_widget(layout, zero_button):
+            zero_item = item
             continue
 
         if widget is not None and widget.objectName() == "readOnlyNotice":
-            motor_items.append(item)
+            notice_item = item
             continue
 
         unclassified_items.append(item)
 
     # ------------------------------------------------------------------
-    # Full-width 100 px header.
-    # The drive connection status is intentionally removed from the header;
-    # this area is reserved for the future Lumigon graphical header artwork.
+    # Full-width 100 px header. Reserved for future Lumigon artwork.
     # ------------------------------------------------------------------
     title = window.findChild(QLabel, "appTitle")
 
@@ -173,8 +182,7 @@ def organize_main_window_tabs(window):
     root.addWidget(header_widget, 0)
     window.main_header = header_widget
 
-    # Move drive connection status beside the existing Connect/Disconnect
-    # controls inside the Communication group instead of the header.
+    # Drive connection state lives inside Communication, not the header.
     if communication_item is not None and communication_item.widget() is not None:
         communication_box = communication_item.widget()
         communication_layout = communication_box.layout()
@@ -187,7 +195,7 @@ def organize_main_window_tabs(window):
             window.drive_status_caption = status_caption
 
     # ------------------------------------------------------------------
-    # Lumisphere-style compact adjacent tab strip, retaining Lumigon colors.
+    # Compact Lumisphere-style tab strip, retaining Lumigon colors.
     # ------------------------------------------------------------------
     tabs = QTabWidget()
     tabs.setObjectName("mainTabs")
@@ -196,16 +204,64 @@ def organize_main_window_tabs(window):
     tabs.tabBar().setExpanding(False)
     tabs.tabBar().setDrawBase(False)
 
+    # ------------------------------------------------------------------
+    # Motor Control: keep Communication full width, then place the four
+    # functional cards in one compact row:
+    # Gamma axis | Gamma profile | C axis | C profile.
+    # This intentionally leaves the lower half of the tab available for
+    # later commissioning/status functions instead of stretching cards.
+    # ------------------------------------------------------------------
     motor_tab = QWidget()
     motor_layout = QVBoxLayout(motor_tab)
     motor_layout.setContentsMargins(8, 8, 8, 8)
     motor_layout.setSpacing(8)
 
-    for item in motor_items:
-        _add_item(motor_layout, item, motor_tab)
+    if communication_item is not None:
+        _add_item(motor_layout, communication_item, motor_tab)
+
+    compact_row = QHBoxLayout()
+    compact_row.setContentsMargins(0, 0, 0, 0)
+    compact_row.setSpacing(8)
+
+    if axis_controls_item is not None and axis_controls_item.layout() is not None:
+        old_axis_layout = axis_controls_item.layout()
+        if gamma_panel is not None:
+            old_axis_layout.removeWidget(gamma_panel)
+        if c_panel is not None:
+            old_axis_layout.removeWidget(c_panel)
+
+    if gamma_panel is not None:
+        gamma_panel.setParent(motor_tab)
+        gamma_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        compact_row.addWidget(gamma_panel, 3)
+
+    if gamma_profile_box is not None:
+        gamma_profile_box.setParent(motor_tab)
+        gamma_profile_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        compact_row.addWidget(gamma_profile_box, 2)
+
+    if c_panel is not None:
+        c_panel.setParent(motor_tab)
+        c_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        compact_row.addWidget(c_panel, 3)
+
+    if c_profile_box is not None:
+        c_profile_box.setParent(motor_tab)
+        c_profile_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        compact_row.addWidget(c_profile_box, 2)
+
+    motor_layout.addLayout(compact_row)
+
     for item in unclassified_items:
         _add_item(motor_layout, item, motor_tab)
-    motor_layout.addStretch()
+
+    if zero_item is not None:
+        _add_item(motor_layout, zero_item, motor_tab)
+
+    if notice_item is not None:
+        _add_item(motor_layout, notice_item, motor_tab)
+
+    motor_layout.addStretch(1)
 
     measurement_tab = QWidget()
     measurement_layout = QVBoxLayout(measurement_tab)
