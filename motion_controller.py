@@ -30,6 +30,8 @@ from machine_config import (
     MOTION_POLL_INTERVAL_SECONDS,
     GAMMA_PUU_PER_DEGREE,
     C_PUU_PER_DEGREE,
+    GAMMA_GEAR_RATIO,
+    C_GEAR_RATIO,
     GAMMA_SIGN,
     C_SIGN,
     GAMMA_TOLERANCE_PUU,
@@ -42,6 +44,7 @@ class Axis:
     name: str
     slave_id: int
     puu_per_degree: float
+    gear_ratio: float
     sign: int
     tolerance_puu: int
 
@@ -50,6 +53,7 @@ GAMMA = Axis(
     name="Gamma",
     slave_id=GAMMA_ID,
     puu_per_degree=GAMMA_PUU_PER_DEGREE,
+    gear_ratio=GAMMA_GEAR_RATIO,
     sign=GAMMA_SIGN,
     tolerance_puu=GAMMA_TOLERANCE_PUU,
 )
@@ -58,6 +62,7 @@ C_AXIS = Axis(
     name="C",
     slave_id=C_ID,
     puu_per_degree=C_PUU_PER_DEGREE,
+    gear_ratio=C_GEAR_RATIO,
     sign=C_SIGN,
     tolerance_puu=C_TOLERANCE_PUU,
 )
@@ -129,6 +134,19 @@ class MotionController:
             return self.gamma_expected_speed_raw
         return self.c_expected_speed_raw
 
+    def motion_timeout_seconds(self, axis: Axis, delta_degree: float) -> float:
+        """Return a conservative timeout that scales with commanded travel/speed."""
+        motor_rpm = self.expected_speed_raw(axis) / 10.0
+        if motor_rpm <= 0.0:
+            return MOVE_TIMEOUT_SECONDS
+
+        output_deg_per_second = motor_rpm * 6.0 / axis.gear_ratio
+        if output_deg_per_second <= 0.0:
+            return MOVE_TIMEOUT_SECONDS
+
+        estimated_motion_s = abs(delta_degree) / output_deg_per_second
+        return max(MOVE_TIMEOUT_SECONDS, estimated_motion_s * 1.5 + 5.0)
+
     def verify_axis(self, axis: Axis):
         alarm = self.modbus.read_u16(axis.slave_id, P0_01)
         if alarm != 0:
@@ -176,14 +194,24 @@ class MotionController:
             )
 
     def verify_servo_selection(self, axis: Axis):
-        """Require the commanded axis to be ON; the other servo may also remain ON."""
+        """Require the commanded axis to be ON; the other servo may remain ON."""
         status = self.modbus.read_u16(axis.slave_id, P0_46)
         servo_on = bool(status & SON_BIT)
         if not servo_on:
             raise RuntimeError(f"{axis.name} Servo is OFF.")
 
-    def wait_for_target(self, axis: Axis, expected_feedback: int):
-        deadline = time.monotonic() + MOVE_TIMEOUT_SECONDS
+    def wait_for_target(
+        self,
+        axis: Axis,
+        expected_feedback: int,
+        timeout_seconds: float = None,
+    ):
+        timeout = (
+            MOVE_TIMEOUT_SECONDS
+            if timeout_seconds is None
+            else max(1.0, float(timeout_seconds))
+        )
+        deadline = time.monotonic() + timeout
         last_feedback = None
 
         while time.monotonic() < deadline:
@@ -202,7 +230,7 @@ class MotionController:
             time.sleep(MOTION_POLL_INTERVAL_SECONDS)
 
         raise RuntimeError(
-            f"{axis.name}: motion timeout. "
+            f"{axis.name}: motion timeout after {timeout:.1f} s. "
             f"Expected {expected_feedback:+d} PUU, "
             f"last feedback {last_feedback:+d} PUU."
         )
@@ -248,7 +276,11 @@ class MotionController:
             )
 
         self.modbus.write_u16(axis.slave_id, P5_07, 1)
-        self.wait_for_target(axis, expected_feedback)
+        self.wait_for_target(
+            axis,
+            expected_feedback,
+            timeout_seconds=self.motion_timeout_seconds(axis, delta_degree),
+        )
 
     def jog(self, axis: Axis, delta_degree: float):
         if abs(abs(delta_degree) - JOG_STEP_DEG) > 1e-9:
