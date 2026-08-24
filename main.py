@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 from main_window import MainWindow
 from axis_profile_controls import attach_axis_profile_controls
 from luxmeter_controls import attach_luxmeter_controls
+from tabbed_layout import organize_main_window_tabs
 
 from machine_config import (
     ABSOLUTE_LIMIT_DEG,
@@ -38,7 +39,9 @@ def main():
             "Continuous bounded moves; one-degree segmentation disabled."
         )
 
-    window.show()
+    organize_main_window_tabs(window)
+
+    window.showMaximized()
 
     sys.exit(
         app.exec()
