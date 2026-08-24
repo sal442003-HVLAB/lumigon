@@ -1,7 +1,10 @@
-from PySide6.QtCore import Qt
+import time
+
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
@@ -11,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -24,7 +28,7 @@ from measurement_execution import (
     SCAN_GRID,
     SCAN_SINGLE_C_GAMMA,
     SCAN_SINGLE_GAMMA_C,
-    SinglePointMeasurementWorker,
+    MeasurementRunWorker,
 )
 
 
@@ -55,13 +59,156 @@ def _format_duration(seconds):
     return f"{secs} s"
 
 
-def build_measurement_workspace(window):
-    """Build the profile-driven Measurement workspace.
+class MeasurementProgressDialog(QDialog):
+    """Run monitor for an automatic measurement sequence."""
 
-    Commissioning stage 2 executes exactly one validated point per button click.
-    Automatic multi-point looping remains disabled until the single-point motion,
-    settling, Lux acquisition and candela calculation have been proven on hardware.
-    """
+    def __init__(self, total_points, initial_estimate_s, parent=None):
+        super().__init__(parent)
+        self.total_points = max(1, int(total_points))
+        self.initial_estimate_s = max(0.0, float(initial_estimate_s))
+        self.completed_points = 0
+        self.started_at = time.monotonic()
+        self.run_finished = False
+
+        self.setWindowTitle("Lumigon — Measurement Run")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(12)
+
+        title = QLabel("Automatic Measurement in Progress")
+        title.setObjectName("measurementRunTitle")
+        root.addWidget(title)
+
+        self.status_label = QLabel("Preparing measurement…")
+        self.status_label.setWordWrap(True)
+        self.status_label.setObjectName("measurementRunStatus")
+        root.addWidget(self.status_label)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(8)
+
+        self.current_point_label = QLabel("—")
+        self.target_label = QLabel("—")
+        self.completed_label = QLabel("0")
+        self.remaining_label = QLabel(str(self.total_points))
+        self.elapsed_label = QLabel("0 s")
+        self.eta_label = QLabel(_format_duration(self.initial_estimate_s))
+
+        grid.addWidget(QLabel("Current point:"), 0, 0)
+        grid.addWidget(self.current_point_label, 0, 1)
+        grid.addWidget(QLabel("Target:"), 1, 0)
+        grid.addWidget(self.target_label, 1, 1)
+        grid.addWidget(QLabel("Completed:"), 2, 0)
+        grid.addWidget(self.completed_label, 2, 1)
+        grid.addWidget(QLabel("Remaining:"), 3, 0)
+        grid.addWidget(self.remaining_label, 3, 1)
+        grid.addWidget(QLabel("Elapsed:"), 4, 0)
+        grid.addWidget(self.elapsed_label, 4, 1)
+        grid.addWidget(QLabel("Estimated remaining:"), 5, 0)
+        grid.addWidget(self.eta_label, 5, 1)
+        root.addLayout(grid)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, self.total_points)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("%v / %m points   •   %p%")
+        root.addWidget(self.progress_bar)
+
+        controls = QHBoxLayout()
+        controls.addStretch(1)
+        self.pause_button = QPushButton("Pause")
+        self.abort_button = QPushButton("Abort")
+        controls.addWidget(self.pause_button)
+        controls.addWidget(self.abort_button)
+        root.addLayout(controls)
+
+        self.clock_timer = QTimer(self)
+        self.clock_timer.setInterval(500)
+        self.clock_timer.timeout.connect(self._refresh_times)
+        self.clock_timer.start()
+
+        self.setStyleSheet(
+            """
+            QDialog {
+                background-color: #101820;
+                color: #E8EEF3;
+            }
+            QLabel#measurementRunTitle {
+                color: #4DA3FF;
+                font-size: 16pt;
+                font-weight: 700;
+            }
+            QLabel#measurementRunStatus {
+                color: #C7D7E2;
+                background-color: #17232D;
+                border: 1px solid #34495E;
+                border-radius: 6px;
+                padding: 10px;
+            }
+            QProgressBar {
+                border: 1px solid #34495E;
+                border-radius: 5px;
+                background-color: #111B23;
+                text-align: center;
+                min-height: 24px;
+            }
+            QProgressBar::chunk {
+                background-color: #1769AA;
+                border-radius: 4px;
+            }
+            """
+        )
+
+    def _refresh_times(self):
+        elapsed = max(0.0, time.monotonic() - self.started_at)
+        self.elapsed_label.setText(_format_duration(elapsed))
+
+        remaining_points = max(0, self.total_points - self.completed_points)
+        if self.completed_points > 0:
+            avg_point_s = elapsed / self.completed_points
+            eta_s = avg_point_s * remaining_points
+        else:
+            eta_s = max(0.0, self.initial_estimate_s - elapsed)
+        self.eta_label.setText(_format_duration(eta_s))
+
+    def set_point(self, sequence, total, c_deg, gamma_deg):
+        self.current_point_label.setText(f"{sequence} / {total}")
+        self.target_label.setText(f"C {c_deg:+.3f}°   •   Gamma {gamma_deg:+.3f}°")
+
+    def set_status(self, text):
+        self.status_label.setText(text)
+
+    def set_completed(self, completed):
+        self.completed_points = max(0, min(int(completed), self.total_points))
+        remaining = max(0, self.total_points - self.completed_points)
+        self.completed_label.setText(str(self.completed_points))
+        self.remaining_label.setText(str(remaining))
+        self.progress_bar.setValue(self.completed_points)
+        self._refresh_times()
+
+    def set_paused(self, paused):
+        if paused:
+            self.pause_button.setText("Resume")
+            self.set_status("Measurement paused at a safe checkpoint.")
+        else:
+            self.pause_button.setText("Pause")
+
+    def finish(self, text):
+        self.run_finished = True
+        self.clock_timer.stop()
+        self.set_status(text)
+        self.pause_button.setEnabled(False)
+        self.abort_button.setEnabled(False)
+
+
+
+def build_measurement_workspace(window):
+    """Build profile-driven planning and automatic single-axis execution."""
 
     page = QWidget()
     page.setObjectName("measurementWorkspace")
@@ -71,7 +218,6 @@ def build_measurement_workspace(window):
     root.setSpacing(8)
 
     title_row = QHBoxLayout()
-
     title_block = QVBoxLayout()
     title = QLabel("Measurement Workspace")
     title.setObjectName("measurementTitle")
@@ -205,7 +351,7 @@ def build_measurement_workspace(window):
     scan_grid.addWidget(traversal_combo, 4, 1, 1, 3)
 
     envelope = QLabel(
-        f"Current software envelope: ±{ABSOLUTE_LIMIT_DEG:g}° on both axes"
+        f"Current enforced software envelope: ±{ABSOLUTE_LIMIT_DEG:g}° on both axes"
     )
     envelope.setObjectName("measurementEnvelope")
     envelope.setWordWrap(True)
@@ -253,7 +399,6 @@ def build_measurement_workspace(window):
     plan_header = QHBoxLayout()
     plan_title = QLabel("Test Plan Preview")
     plan_title.setObjectName("measurementSectionTitle")
-
     plan_summary = QLabel("0 points  •  estimated acquisition time: —")
     plan_summary.setStyleSheet("color: #8AA8BC; padding-left: 12px;")
 
@@ -296,19 +441,16 @@ def build_measurement_workspace(window):
     execution_layout.setSpacing(8)
 
     engine_note = QLabel(
-        "Stage 2 commissioning: one validated point per click. "
-        "Automatic multi-point looping is still disabled."
+        "Validate a single-axis plan, then Start Measurement to run all Ready points automatically."
     )
     engine_note.setObjectName("measurementEngineNote")
     engine_note.setWordWrap(True)
 
-    start_button = QPushButton("Measure Next Point")
+    start_button = QPushButton("Start Measurement")
     pause_button = QPushButton("Pause")
     abort_button = QPushButton("Abort")
-
     start_button.setEnabled(False)
     pause_button.setEnabled(False)
-    pause_button.setToolTip("Pause will be enabled with automatic multi-point scanning.")
     abort_button.setEnabled(False)
 
     execution_layout.addWidget(engine_note, 1)
@@ -320,9 +462,10 @@ def build_measurement_workspace(window):
     plan_is_valid = False
     plan_points = []
     execution_running = False
-    active_row = None
     active_worker = None
+    progress_dialog = None
     main_timer_was_active = False
+    run_completed_normally = False
 
     def _repolish(widget):
         widget.style().unpolish(widget)
@@ -375,12 +518,13 @@ def build_measurement_workspace(window):
             f"≈ {_format_duration(estimate_s)}  •  motion time excluded"
         )
 
-    def _next_ready_row():
+    def _ready_rows():
+        rows = []
         for row in range(plan_table.rowCount()):
             item = plan_table.item(row, 8)
             if item is not None and item.text() == "Ready":
-                return row
-        return None
+                rows.append(row)
+        return rows
 
     def _measured_count():
         count = 0
@@ -421,14 +565,12 @@ def build_measurement_workspace(window):
 
     def _apply_scan_mode(*_args):
         mode = scan_mode_combo.currentIndex()
-
         if mode == SCAN_SINGLE_C_GAMMA:
             c_end.setValue(c_start.value())
             traversal_combo.setCurrentIndex(0)
         elif mode == SCAN_SINGLE_GAMMA_C:
             gamma_end.setValue(gamma_start.value())
             traversal_combo.setCurrentIndex(1)
-
         _refresh_scan_mode_controls()
         _mark_dirty()
 
@@ -455,26 +597,23 @@ def build_measurement_workspace(window):
             validate_button,
         ):
             control.setEnabled(enabled)
-
         if enabled:
-            # Restore mode-dependent enabled/hidden states without marking the
-            # already validated plan dirty after a completed point.
             _refresh_scan_mode_controls()
 
     def _build_points():
         mode = scan_mode_combo.currentIndex()
 
         if mode == SCAN_SINGLE_C_GAMMA:
-            c_values = [c_start.value()]
+            c_value = c_start.value()
             gamma_values = _axis_values(
                 gamma_start.value(), gamma_end.value(), gamma_step.value()
             )
-            return [(c_values[0], gamma_value) for gamma_value in gamma_values]
+            return [(c_value, gamma_value) for gamma_value in gamma_values]
 
         if mode == SCAN_SINGLE_GAMMA_C:
-            gamma_values = [gamma_start.value()]
+            gamma_value = gamma_start.value()
             c_values = _axis_values(c_start.value(), c_end.value(), c_step.value())
-            return [(c_value, gamma_values[0]) for c_value in c_values]
+            return [(c_value, gamma_value) for c_value in c_values]
 
         c_values = _axis_values(c_start.value(), c_end.value(), c_step.value())
         gamma_values = _axis_values(
@@ -485,8 +624,7 @@ def build_measurement_workspace(window):
         if estimated_count > MAX_PLAN_POINTS:
             raise ValueError(
                 f"The requested grid contains {estimated_count} points. "
-                f"The current preview limit is {MAX_PLAN_POINTS} points. "
-                "Increase the angular step or reduce the scan range."
+                f"The current preview limit is {MAX_PLAN_POINTS} points."
             )
 
         points = []
@@ -507,7 +645,6 @@ def build_measurement_workspace(window):
             return False
 
         _sync_single_axis_values()
-
         try:
             points = _build_points()
         except ValueError as exc:
@@ -549,9 +686,8 @@ def build_measurement_workspace(window):
         _update_plan_summary(len(points))
         _set_state(f"DRAFT  •  {len(points)} POINTS", "measurementStateDraft")
         engine_note.setText(
-            "Stage 2 commissioning: validate the plan, then execute one point per click."
+            "Plan built. Validate it before automatic execution."
         )
-        start_button.setText("Measure Next Point")
         return True
 
     def validate_plan():
@@ -559,7 +695,6 @@ def build_measurement_workspace(window):
 
         if execution_running:
             return
-
         if not build_plan():
             return
 
@@ -583,7 +718,7 @@ def build_measurement_workspace(window):
             QMessageBox.warning(
                 window,
                 "Measurement Plan",
-                "The plan exceeds the current software motion envelope:\n\n"
+                "The plan exceeds the current enforced software motion envelope:\n\n"
                 + "\n".join(violations),
             )
             return
@@ -596,26 +731,24 @@ def build_measurement_workspace(window):
 
         plan_is_valid = True
         _set_state(f"VALIDATED  •  {len(plan_points)} POINTS", "measurementStateValid")
-
         for row in range(plan_table.rowCount()):
             plan_table.setItem(row, 8, _readonly_item("Ready"))
 
-        start_button.setEnabled(scan_mode_combo.currentIndex() != SCAN_GRID)
         if scan_mode_combo.currentIndex() == SCAN_GRID:
+            start_button.setEnabled(False)
             engine_note.setText(
-                "Plan validated. C × Gamma Grid execution is intentionally disabled "
-                "until single-axis point execution is proven."
+                "Plan validated. C × Gamma Grid execution remains disabled while the "
+                "current commissioning interlock requires the non-sweep servo to stay OFF."
             )
         else:
+            start_button.setEnabled(True)
             engine_note.setText(
-                "Plan validated. Measure Next Point executes exactly one row: "
-                "move sweep axis → settle → Lux average → candela."
+                "Plan validated. Start Measurement will execute all Ready points from start to end."
             )
 
     def _measurement_prerequisites():
         if not plan_is_valid:
             return "Build and validate the test plan before measuring."
-
         if scan_mode_combo.currentIndex() == SCAN_GRID:
             return (
                 "C × Gamma Grid automatic execution is not enabled yet. "
@@ -638,40 +771,45 @@ def build_measurement_workspace(window):
 
         live_worker = getattr(window, "luxmeter_live_worker", None)
         if live_worker is not None and live_worker.isRunning():
-            return "Stop Luxmeter Live acquisition before starting a formal point measurement."
+            return "Stop Luxmeter Live acquisition before starting a formal measurement run."
 
-        if _next_ready_row() is None:
+        if not _ready_rows():
             return "There are no Ready points remaining in this plan."
-
         return None
 
-    def _confirmation_text(row, c_target, gamma_target):
+    def _confirmation_text(ready_rows):
         mode = scan_mode_combo.currentIndex()
-        point_number = row + 1
+        first_row = ready_rows[0]
+        last_row = ready_rows[-1]
+        first_c, first_gamma = plan_points[first_row]
+        last_c, last_gamma = plan_points[last_row]
+
         if mode == SCAN_SINGLE_C_GAMMA:
             axis_text = (
-                f"C remains fixed at {c_target:+.3f}°.\n"
-                f"Gamma will move to {gamma_target:+.3f}°.\n\n"
+                f"C remains fixed at {first_c:+.3f}°.\n"
+                f"Gamma scan: {first_gamma:+.3f}° → {last_gamma:+.3f}°.\n"
                 "Commissioning interlock: Gamma servo must be ON and C servo OFF."
             )
         else:
             axis_text = (
-                f"Gamma remains fixed at {gamma_target:+.3f}°.\n"
-                f"C will move to {c_target:+.3f}°.\n\n"
+                f"Gamma remains fixed at {first_gamma:+.3f}°.\n"
+                f"C scan: {first_c:+.3f}° → {last_c:+.3f}°.\n"
                 "Commissioning interlock: C servo must be ON and Gamma servo OFF."
             )
 
         return (
-            f"Execute point {point_number} only?\n\n"
+            f"Start automatic measurement of {len(ready_rows)} Ready points?\n\n"
             f"{axis_text}\n\n"
-            f"Settling: {settle_spin.value():.1f} s\n"
-            f"Samples: {samples_spin.value()}\n"
-            f"Measurement distance: {distance_spin.value():.2f} m\n\n"
-            "No other point will be executed automatically."
+            f"Settling: {settle_spin.value():.1f} s / point\n"
+            f"Samples: {samples_spin.value()} / point\n"
+            f"Distance: {distance_spin.value():.2f} m\n\n"
+            "The run proceeds from the first Ready point to the last without "
+            "asking for confirmation at each point."
         )
 
     def _finish_execution_ui():
-        nonlocal execution_running, active_row, active_worker, main_timer_was_active
+        nonlocal execution_running, active_worker, progress_dialog
+        nonlocal main_timer_was_active, run_completed_normally
 
         worker = active_worker
         if worker is not None:
@@ -688,47 +826,44 @@ def build_measurement_workspace(window):
         main_timer_was_active = False
 
         _set_editor_enabled(True)
-        abort_button.setEnabled(False)
         pause_button.setEnabled(False)
+        pause_button.setText("Pause")
+        abort_button.setEnabled(False)
 
         measured = _measured_count()
         total = plan_table.rowCount()
-        next_row = _next_ready_row()
+        remaining = len(_ready_rows())
 
-        if total > 0 and measured == total:
+        if run_completed_normally and total > 0 and remaining == 0:
             _set_state(f"COMPLETE  •  {measured}/{total} MEASURED", "measurementStateValid")
             start_button.setEnabled(False)
-            start_button.setText("Measurement Complete")
-            engine_note.setText(
-                "All points in this plan have been measured manually one point at a time."
-            )
+            engine_note.setText("Measurement run complete — all validated points were measured.")
         else:
             _set_state(
                 f"VALIDATED  •  {measured}/{total} MEASURED",
                 "measurementStateValid",
             )
-            start_button.setText("Measure Next Point")
-            start_button.setEnabled(plan_is_valid and next_row is not None)
+            start_button.setEnabled(plan_is_valid and remaining > 0)
 
-        active_row = None
+        if progress_dialog is not None:
+            QTimer.singleShot(800, progress_dialog.accept)
+        progress_dialog = None
+        run_completed_normally = False
 
-    def start_single_point_measurement():
-        nonlocal execution_running, active_row, active_worker, main_timer_was_active
+    def start_measurement_run():
+        nonlocal execution_running, active_worker, progress_dialog
+        nonlocal main_timer_was_active, run_completed_normally
 
         problem = _measurement_prerequisites()
         if problem:
             QMessageBox.warning(window, "Measurement", problem)
             return
 
-        row = _next_ready_row()
-        if row is None:
-            return
-
-        c_target, gamma_target = plan_points[row]
+        ready_rows = _ready_rows()
         answer = QMessageBox.question(
             window,
-            "Confirm Single-Point Measurement",
-            _confirmation_text(row, c_target, gamma_target),
+            "Confirm Automatic Measurement",
+            _confirmation_text(ready_rows),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -739,12 +874,16 @@ def build_measurement_workspace(window):
         if hasattr(window, "luxmeter_sensitivity_spin"):
             meter.sensitivity_na_per_lx = window.luxmeter_sensitivity_spin.value()
 
-        worker = SinglePointMeasurementWorker(
+        run_points = [
+            (row, plan_points[row][0], plan_points[row][1])
+            for row in ready_rows
+        ]
+
+        worker = MeasurementRunWorker(
             motion=window.motion,
             meter=meter,
             scan_mode=scan_mode_combo.currentIndex(),
-            target_c_deg=c_target,
-            target_gamma_deg=gamma_target,
+            points=run_points,
             settle_time_s=settle_spin.value(),
             samples=samples_spin.value(),
             integration_ms=integration_spin.value(),
@@ -753,10 +892,18 @@ def build_measurement_workspace(window):
             parent=window,
         )
 
+        dialog = MeasurementProgressDialog(
+            len(run_points),
+            _estimated_acquisition_seconds(len(run_points)),
+            parent=window,
+        )
+
         execution_running = True
-        active_row = row
         active_worker = worker
+        progress_dialog = dialog
         window.measurement_worker = worker
+        window.measurement_progress_dialog = dialog
+        run_completed_normally = False
 
         timer = getattr(window, "timer", None)
         main_timer_was_active = bool(timer is not None and timer.isActive())
@@ -765,24 +912,38 @@ def build_measurement_workspace(window):
 
         _set_editor_enabled(False)
         start_button.setEnabled(False)
-        pause_button.setEnabled(False)
+        pause_button.setEnabled(True)
         abort_button.setEnabled(True)
-        plan_table.setItem(row, 8, _readonly_item("Running"))
-        plan_table.selectRow(row)
-        first_item = plan_table.item(row, 0)
-        if first_item is not None:
-            plan_table.scrollToItem(first_item)
-
         _set_state(
-            f"RUNNING  •  POINT {row + 1}/{plan_table.rowCount()}",
+            f"RUNNING  •  0/{len(run_points)} MEASURED",
             "measurementStateDraft",
         )
-        engine_note.setText("Preparing single-point measurement…")
+        engine_note.setText("Automatic measurement run started.")
+
+        completed_this_run = 0
+        paused = False
 
         def on_progress(message):
             engine_note.setText(message)
+            dialog.set_status(message)
 
-        def on_result(current_na, lux, stdev_lux, candela):
+        def on_point_started(row, sequence, total, c_deg, gamma_deg):
+            plan_table.setItem(row, 8, _readonly_item("Running"))
+            plan_table.selectRow(row)
+            first_item = plan_table.item(row, 0)
+            if first_item is not None:
+                plan_table.scrollToItem(first_item)
+            dialog.set_point(sequence, total, c_deg, gamma_deg)
+            _set_state(
+                f"RUNNING  •  POINT {sequence}/{total}",
+                "measurementStateDraft",
+            )
+
+        def on_point_result(row, current_na, lux, stdev_lux, candela):
+            nonlocal completed_this_run
+            completed_this_run += 1
+
+            c_target, gamma_target = plan_points[row]
             plan_table.setItem(row, 5, _readonly_item(f"{lux:.3f}"))
             plan_table.setItem(row, 6, _readonly_item(f"{candela:.1f}"))
             plan_table.setItem(row, 8, _readonly_item("Measured"))
@@ -798,8 +959,7 @@ def build_measurement_workspace(window):
 
             window.luxmeter_last_current_a = current_na * 1e-9
             window.luxmeter_last_lux = lux
-
-            result = {
+            window.measurement_results.append({
                 "point": row + 1,
                 "c_deg": c_target,
                 "gamma_deg": gamma_target,
@@ -810,50 +970,87 @@ def build_measurement_workspace(window):
                 "distance_m": distance_spin.value(),
                 "samples": samples_spin.value(),
                 "integration_ms": meter.integration_time_ms,
-            }
-            window.measurement_results.append(result)
+            })
+
+            dialog.set_completed(completed_this_run)
             engine_note.setText(
                 f"Point {row + 1} measured: {lux:.3f} lx  •  "
                 f"{candela:.1f} cd  •  σ={stdev_lux:.3f} lx"
             )
 
-        def on_aborted(message):
-            plan_table.setItem(row, 8, _readonly_item("Ready"))
+        def on_pause_state(is_paused):
+            nonlocal paused
+            paused = bool(is_paused)
+            pause_button.setText("Resume" if paused else "Pause")
+            dialog.set_paused(paused)
+
+        def toggle_pause():
+            if active_worker is None or not active_worker.isRunning():
+                return
+            active_worker.request_pause(not paused)
+
+        def request_abort():
+            if active_worker is None or not active_worker.isRunning():
+                return
+            active_worker.requestInterruption()
+            active_worker.request_pause(False)
+            pause_button.setEnabled(False)
+            abort_button.setEnabled(False)
+            dialog.pause_button.setEnabled(False)
+            dialog.abort_button.setEnabled(False)
+            message = (
+                "Abort requested — an active servo move is allowed to finish safely; "
+                "the run will stop at the next safe checkpoint."
+            )
             engine_note.setText(message)
+            dialog.set_status(message)
+
+        def on_aborted(message):
+            for row in ready_rows:
+                item = plan_table.item(row, 8)
+                if item is not None and item.text() == "Running":
+                    plan_table.setItem(row, 8, _readonly_item("Ready"))
+            engine_note.setText(message)
+            dialog.finish(message)
 
         def on_failed(message):
-            plan_table.setItem(row, 8, _readonly_item("Ready"))
-            engine_note.setText("Point measurement failed — correct the condition and retry.")
-            QMessageBox.critical(window, "Single-Point Measurement Error", message)
+            for row in ready_rows:
+                item = plan_table.item(row, 8)
+                if item is not None and item.text() == "Running":
+                    plan_table.setItem(row, 8, _readonly_item("Ready"))
+            engine_note.setText("Measurement run stopped due to an error.")
+            dialog.finish("Measurement run failed.")
+            QMessageBox.critical(window, "Measurement Run Error", message)
+
+        def on_completed():
+            nonlocal run_completed_normally
+            run_completed_normally = True
+            dialog.set_completed(len(run_points))
+            dialog.finish("Measurement run complete.")
 
         worker.progress.connect(on_progress)
-        worker.result_ready.connect(on_result)
+        worker.point_started.connect(on_point_started)
+        worker.point_result.connect(on_point_result)
+        worker.pause_state.connect(on_pause_state)
         worker.aborted.connect(on_aborted)
         worker.failed.connect(on_failed)
+        worker.run_completed.connect(on_completed)
         worker.finished.connect(_finish_execution_ui)
+
+        pause_button.clicked.connect(toggle_pause)
+        abort_button.clicked.connect(request_abort)
+        dialog.pause_button.clicked.connect(toggle_pause)
+        dialog.abort_button.clicked.connect(request_abort)
+
+        dialog.show()
         worker.start()
-
-    def abort_single_point():
-        worker = active_worker
-        if worker is None or not worker.isRunning():
-            abort_button.setEnabled(False)
-            return
-
-        worker.requestInterruption()
-        abort_button.setEnabled(False)
-        engine_note.setText(
-            "Abort requested — an active servo move is allowed to finish safely; "
-            "settling/acquisition will stop at the next safe checkpoint."
-        )
 
     build_button.clicked.connect(build_plan)
     validate_button.clicked.connect(validate_plan)
-    start_button.clicked.connect(start_single_point_measurement)
-    abort_button.clicked.connect(abort_single_point)
+    start_button.clicked.connect(start_measurement_run)
 
     scan_mode_combo.currentIndexChanged.connect(_apply_scan_mode)
     traversal_combo.currentIndexChanged.connect(_mark_dirty)
-
     c_start.valueChanged.connect(_sync_single_axis_values)
     gamma_start.valueChanged.connect(_sync_single_axis_values)
 
@@ -907,6 +1104,7 @@ def build_measurement_workspace(window):
     window.measurement_abort_button = abort_button
     window.measurement_state_label = state
     window.measurement_worker = None
+    window.measurement_progress_dialog = None
     window.measurement_results = []
 
     return page
