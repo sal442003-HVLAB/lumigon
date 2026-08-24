@@ -7,6 +7,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 
+HEADER_HEIGHT = 100
+
+
 def _layout_contains_widget(layout, target):
     if layout is None or target is None:
         return False
@@ -73,7 +76,7 @@ def _placeholder_tab(title, description):
 def organize_main_window_tabs(window):
     """Split the commissioning HMI into functional tabs without changing logic.
 
-    Existing controls are re-used and re-parented.  No servo or luxmeter command
+    Existing controls are re-used and re-parented. No servo or luxmeter command
     behavior is changed by this function.
     """
 
@@ -82,6 +85,9 @@ def organize_main_window_tabs(window):
         raise RuntimeError("Main window layout is not available.")
 
     root = central.layout()
+    root.setContentsMargins(10, 8, 10, 8)
+    root.setSpacing(4)
+
     original_items = []
     while root.count():
         original_items.append(root.takeAt(0))
@@ -131,13 +137,30 @@ def organize_main_window_tabs(window):
 
         unclassified_items.append(item)
 
+    # Lumisphere-like header proportions: full-width, about 100 px high.
     if header_item is not None:
-        _add_item(root, header_item, central)
+        header_widget = QWidget()
+        header_widget.setObjectName("mainHeader")
+        header_widget.setFixedHeight(HEADER_HEIGHT)
+
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.setContentsMargins(14, 0, 14, 0)
+        header_layout.setSpacing(0)
+        _add_item(header_layout, header_item, header_widget)
+
+        title = window.findChild(QLabel, "appTitle")
+        if title is not None:
+            title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        root.addWidget(header_widget)
+        window.main_header = header_widget
 
     tabs = QTabWidget()
     tabs.setObjectName("mainTabs")
     tabs.setDocumentMode(True)
     tabs.setMovable(False)
+    tabs.tabBar().setExpanding(False)
+    tabs.tabBar().setDrawBase(False)
 
     motor_tab = QWidget()
     motor_layout = QVBoxLayout(motor_tab)
@@ -200,39 +223,67 @@ def organize_main_window_tabs(window):
     window.safety_tab = safety_tab
     window.settings_tab = settings_tab
 
+    # Keep Lumigon's navy/blue palette, but use Lumisphere-like proportions:
+    # compact adjacent tabs directly under a 100 px header.
     window.setStyleSheet(
         window.styleSheet()
         + """
+        QWidget#mainHeader {
+            background-color: #0B1420;
+            border: 1px solid #1E2E3D;
+            border-radius: 0px;
+        }
+
+        QLabel#appTitle {
+            font-size: 26pt;
+            font-weight: 700;
+            color: #4DA3FF;
+            padding-left: 4px;
+        }
+
         QTabWidget#mainTabs::pane {
             border: 1px solid #34495E;
-            border-radius: 8px;
-            top: -1px;
+            border-radius: 0px;
+            top: 0px;
             background-color: #101820;
         }
-        QTabBar::tab {
-            background-color: #17232D;
-            color: #AAB7C4;
-            border: 1px solid #34495E;
-            border-bottom: none;
-            padding: 10px 24px;
-            margin-right: 3px;
-            min-width: 120px;
-            font-weight: 600;
+
+        QTabWidget#mainTabs > QTabBar {
+            left: 0px;
         }
+
+        QTabBar::tab {
+            background-color: #14212B;
+            color: #D7E1E8;
+            border: 1px solid #34495E;
+            border-bottom: 1px solid #34495E;
+            border-radius: 2px;
+            padding: 7px 15px;
+            margin: 0px 1px 0px 0px;
+            min-width: 0px;
+            min-height: 20px;
+            font-weight: 500;
+        }
+
         QTabBar::tab:selected {
             background-color: #1769AA;
             color: #FFFFFF;
+            border-color: #2C7DBB;
+            font-weight: 600;
         }
+
         QTabBar::tab:hover:!selected {
-            background-color: #203342;
-            color: #E8EEF3;
+            background-color: #1C303F;
+            color: #FFFFFF;
         }
+
         QLabel#tabSectionTitle {
             font-size: 16pt;
             font-weight: 700;
             color: #4DA3FF;
             padding: 8px 4px;
         }
+
         QLabel#tabPlaceholder {
             color: #AAB7C4;
             background-color: #17232D;
