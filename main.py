@@ -41,6 +41,10 @@ def main():
 
     organize_main_window_tabs(window)
 
+    screen = app.primaryScreen()
+    if screen is not None:
+        window.setGeometry(screen.availableGeometry())
+
     window.showMaximized()
 
     sys.exit(
