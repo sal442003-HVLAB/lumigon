@@ -15,6 +15,8 @@ from axis_profile_controls import attach_axis_profile_controls
 from luxmeter_controls import attach_luxmeter_controls
 from tabbed_layout import organize_main_window_tabs
 from execution_mode_controls import attach_execution_mode_controls
+from measurement_ui_fixes import attach_measurement_ui_fixes
+from luxmeter_resilience import install_phamp_connect_retry
 
 from machine_config import (
     GAMMA_LIMIT_DEG,
@@ -166,6 +168,8 @@ def main():
         APP_VERSION
     )
 
+    install_phamp_connect_retry()
+
     window = MainWindow()
     attach_axis_profile_controls(window)
     attach_luxmeter_controls(window)
@@ -181,6 +185,7 @@ def main():
     organize_main_window_tabs(window)
     _apply_confirmed_axis_limits(window)
     attach_execution_mode_controls(window)
+    attach_measurement_ui_fixes(window)
 
     screen = app.primaryScreen()
     if screen is not None:
