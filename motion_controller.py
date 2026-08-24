@@ -24,8 +24,8 @@ from machine_config import (
     GAMMA_SCURVE_DEFAULT_MS,
     C_SCURVE_DEFAULT_MS,
     JOG_STEP_DEG,
-    ABSOLUTE_LIMIT_DEG,
-    MAX_RELATIVE_MOVE_DEG,
+    GAMMA_LIMIT_DEG,
+    C_LIMIT_DEG,
     MOVE_TIMEOUT_SECONDS,
     MOTION_POLL_INTERVAL_SECONDS,
     GAMMA_PUU_PER_DEGREE,
@@ -94,6 +94,14 @@ class MotionController:
     @staticmethod
     def puu_to_degree(axis: Axis, puu: int) -> float:
         return puu / axis.puu_per_degree / axis.sign
+
+    @staticmethod
+    def axis_limit_deg(axis: Axis) -> float:
+        if axis.slave_id == GAMMA_ID:
+            return GAMMA_LIMIT_DEG
+        if axis.slave_id == C_ID:
+            return C_LIMIT_DEG
+        raise RuntimeError(f"Unknown axis slave ID: {axis.slave_id}")
 
     def get_zero(self, axis: Axis) -> int:
         zero = (
@@ -168,26 +176,11 @@ class MotionController:
             )
 
     def verify_servo_selection(self, axis: Axis):
-        gamma_status = self.modbus.read_u16(GAMMA_ID, P0_46)
-        c_status = self.modbus.read_u16(C_ID, P0_46)
-
-        gamma_son = bool(gamma_status & SON_BIT)
-        c_son = bool(c_status & SON_BIT)
-
-        if axis.slave_id == GAMMA_ID:
-            if not gamma_son:
-                raise RuntimeError("Gamma Servo is OFF.")
-            if c_son:
-                raise RuntimeError(
-                    "C Servo must remain OFF during commissioning."
-                )
-        else:
-            if not c_son:
-                raise RuntimeError("C Servo is OFF.")
-            if gamma_son:
-                raise RuntimeError(
-                    "Gamma Servo must remain OFF during commissioning."
-                )
+        """Require the commanded axis to be ON; the other servo may also remain ON."""
+        status = self.modbus.read_u16(axis.slave_id, P0_46)
+        servo_on = bool(status & SON_BIT)
+        if not servo_on:
+            raise RuntimeError(f"{axis.name} Servo is OFF.")
 
     def wait_for_target(self, axis: Axis, expected_feedback: int):
         deadline = time.monotonic() + MOVE_TIMEOUT_SECONDS
@@ -215,10 +208,13 @@ class MotionController:
         )
 
     def execute_relative(self, axis: Axis, delta_degree: float):
-        if abs(delta_degree) > MAX_RELATIVE_MOVE_DEG + 1e-9:
+        axis_limit = self.axis_limit_deg(axis)
+        max_relative_span = 2.0 * axis_limit
+
+        if abs(delta_degree) > max_relative_span + 1e-9:
             raise RuntimeError(
                 f"{axis.name}: relative move {delta_degree:+.4f}° exceeds "
-                f"the maximum legal span of {MAX_RELATIVE_MOVE_DEG:.1f}°."
+                f"the maximum legal span of {max_relative_span:.1f}°."
             )
 
         self.verify_axis(axis)
@@ -227,10 +223,10 @@ class MotionController:
         current_angle = self.get_current_angle(axis)
         target_angle = current_angle + delta_degree
 
-        if abs(target_angle) > ABSOLUTE_LIMIT_DEG + 1e-9:
+        if abs(target_angle) > axis_limit + 1e-9:
             raise RuntimeError(
                 f"{axis.name}: resulting target {target_angle:+.4f}° exceeds "
-                f"the ±{ABSOLUTE_LIMIT_DEG:.1f}° commissioning limit."
+                f"the ±{axis_limit:.1f}° software limit."
             )
 
         feedback_before = self.modbus.read_s32(axis.slave_id, P0_09)
@@ -260,20 +256,23 @@ class MotionController:
 
         current = self.get_current_angle(axis)
         target = current + delta_degree
+        axis_limit = self.axis_limit_deg(axis)
 
-        if abs(target) > ABSOLUTE_LIMIT_DEG:
+        if abs(target) > axis_limit:
             raise RuntimeError(
                 f"{axis.name}: target {target:+.4f}° exceeds "
-                f"±{ABSOLUTE_LIMIT_DEG:.1f}°."
+                f"±{axis_limit:.1f}°."
             )
 
         self.execute_relative(axis, delta_degree)
 
     def move_absolute(self, axis: Axis, target_degree: float):
-        if abs(target_degree) > ABSOLUTE_LIMIT_DEG:
+        axis_limit = self.axis_limit_deg(axis)
+
+        if abs(target_degree) > axis_limit:
             raise RuntimeError(
                 f"{axis.name}: target {target_degree:+.4f}° exceeds "
-                f"±{ABSOLUTE_LIMIT_DEG:.1f}°."
+                f"±{axis_limit:.1f}°."
             )
 
         self.verify_axis(axis)
@@ -285,9 +284,6 @@ class MotionController:
         if abs(remaining) <= 0.01:
             return
 
-        # One continuous PR command. There are no intermediate 1° stops.
-        # Safety is enforced by the absolute ±15° target limit above and
-        # again inside execute_relative().
         self.execute_relative(axis, remaining)
 
     def return_to_zero(self, axis: Axis):
