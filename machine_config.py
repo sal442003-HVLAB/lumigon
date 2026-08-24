@@ -66,13 +66,18 @@ C_SPEED_STEP_RPM = SPEED_STEP_RPM
 
 JOG_STEP_DEG = 0.1
 
-# Commissioning software position limit around Session Zero.
-# Any target must remain inside -15° ... +15° on either axis.
-ABSOLUTE_LIMIT_DEG = 15.0
+# ------------------------------------------------------------
+# Confirmed software motion envelopes around Session Zero
+# ------------------------------------------------------------
+# Gamma axis: -60° ... +60°
+# C axis:     -45° ... +45°
+GAMMA_LIMIT_DEG = 60.0
+C_LIMIT_DEG = 45.0
 
-# A direct move from one legal extreme (-15°) to the other (+15°)
-# can require a 30° relative PR command. The controller checks the
-# resulting absolute target before issuing the command.
+# Legacy compatibility value for older UI/helper code. MotionController does
+# NOT use this shared value for safety checks; it enforces the per-axis limits
+# above. New code should prefer GAMMA_LIMIT_DEG / C_LIMIT_DEG.
+ABSOLUTE_LIMIT_DEG = max(GAMMA_LIMIT_DEG, C_LIMIT_DEG)
 MAX_RELATIVE_MOVE_DEG = 2.0 * ABSOLUTE_LIMIT_DEG
 
 MOVE_TIMEOUT_SECONDS = 30.0
