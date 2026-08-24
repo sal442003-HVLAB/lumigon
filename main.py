@@ -14,6 +14,7 @@ from main_window import MainWindow
 from axis_profile_controls import attach_axis_profile_controls
 from luxmeter_controls import attach_luxmeter_controls
 from tabbed_layout import organize_main_window_tabs
+from execution_mode_controls import attach_execution_mode_controls
 
 from machine_config import (
     GAMMA_LIMIT_DEG,
@@ -179,6 +180,7 @@ def main():
 
     organize_main_window_tabs(window)
     _apply_confirmed_axis_limits(window)
+    attach_execution_mode_controls(window)
 
     screen = app.primaryScreen()
     if screen is not None:
