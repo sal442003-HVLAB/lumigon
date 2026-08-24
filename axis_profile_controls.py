@@ -33,6 +33,9 @@ from motion_controller import GAMMA, C_AXIS
 def _build_axis_profile_box(window, axis, speed_default, ramp_default, scurve_default):
     box = QGroupBox(f"{axis.name} Axis Motion Profile")
     layout = QGridLayout()
+    layout.setContentsMargins(10, 12, 10, 10)
+    layout.setHorizontalSpacing(8)
+    layout.setVerticalSpacing(7)
 
     speed = QDoubleSpinBox()
     speed.setRange(SPEED_MIN_RPM, SPEED_MAX_RPM)
@@ -40,31 +43,38 @@ def _build_axis_profile_box(window, axis, speed_default, ramp_default, scurve_de
     speed.setDecimals(1)
     speed.setSuffix(" rpm")
     speed.setValue(speed_default)
+    speed.setMinimumWidth(110)
 
     ramp = QSpinBox()
     ramp.setRange(PROFILE_MIN_MS, PROFILE_MAX_MS)
     ramp.setSingleStep(PROFILE_STEP_MS)
     ramp.setSuffix(" ms")
     ramp.setValue(ramp_default)
+    ramp.setMinimumWidth(110)
 
     scurve = QSpinBox()
     scurve.setRange(PROFILE_MIN_MS, PROFILE_MAX_MS)
     scurve.setSingleStep(PROFILE_STEP_MS)
     scurve.setSuffix(" ms")
     scurve.setValue(scurve_default)
+    scurve.setMinimumWidth(110)
 
     apply_button = QPushButton(f"Apply to {axis.name} Axis")
     status = QLabel("Not applied in this session")
+    status.setWordWrap(True)
 
+    # Compact vertical layout so the profile card can sit beside its axis card.
     layout.addWidget(QLabel("Speed:"), 0, 0)
     layout.addWidget(speed, 0, 1)
-    layout.addWidget(QLabel("Ramp (Accel/Decel):"), 0, 2)
-    layout.addWidget(ramp, 0, 3)
-    layout.addWidget(QLabel("S-curve:"), 0, 4)
-    layout.addWidget(scurve, 0, 5)
-    layout.addWidget(apply_button, 1, 0, 1, 2)
-    layout.addWidget(status, 1, 2, 1, 4)
+    layout.addWidget(QLabel("Ramp (Accel/Decel):"), 1, 0)
+    layout.addWidget(ramp, 1, 1)
+    layout.addWidget(QLabel("S-curve:"), 2, 0)
+    layout.addWidget(scurve, 2, 1)
+    layout.addWidget(apply_button, 3, 0, 1, 2)
+    layout.addWidget(status, 4, 0, 1, 2)
 
+    layout.setColumnStretch(0, 1)
+    layout.setColumnStretch(1, 1)
     box.setLayout(layout)
 
     def apply_profile():
