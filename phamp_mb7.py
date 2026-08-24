@@ -147,22 +147,51 @@ class PhAmpMB7:
         except serial.SerialException as exc:
             raise PhAmpError(f"Serial write failed for {command!r}: {exc}") from exc
 
+    def _read_response(self) -> str:
+        """Read one ASCII response terminated by CR or LF.
+
+        ``Serial.readline()`` only considers LF a terminator. Older photometric
+        instruments often terminate answers with CR, so waiting for LF can make
+        every otherwise-valid query sit until the serial timeout. Reading byte by
+        byte and accepting either CR or LF removes that artificial delay while
+        retaining the configured timeout for a genuinely missing response.
+        """
+
+        ser = self._require_serial()
+        raw = bytearray()
+        deadline = time.monotonic() + float(self.timeout)
+
+        try:
+            while time.monotonic() < deadline:
+                byte = ser.read(1)
+                if not byte:
+                    continue
+
+                if byte in (b"\r", b"\n"):
+                    if raw:
+                        break
+                    continue
+
+                raw.extend(byte)
+        except serial.SerialException as exc:
+            raise PhAmpError(f"Serial read failed: {exc}") from exc
+
+        if not raw:
+            raise PhAmpProtocolError("No response from Ph-Amp")
+
+        response = raw.decode("ascii", errors="replace").strip()
+        if not response:
+            raise PhAmpProtocolError("Empty response from Ph-Amp")
+        return response
+
     def _query_once(self, command: str) -> str:
         ser = self._require_serial()
         ser.reset_input_buffer()
         self._write_command(command)
         try:
-            raw = ser.readline()
-        except serial.SerialException as exc:
-            raise PhAmpError(f"Serial read failed for {command!r}: {exc}") from exc
-
-        if not raw:
-            raise PhAmpProtocolError(f"No response to {command!r}")
-
-        response = raw.decode("ascii", errors="replace").strip()
-        if not response:
-            raise PhAmpProtocolError(f"Empty response to {command!r}")
-        return response
+            return self._read_response()
+        except PhAmpProtocolError as exc:
+            raise PhAmpProtocolError(f"No response to {command!r}: {exc}") from exc
 
     def _query(self, command: str, *, attempts: int = 1, retry_delay_s: float = 0.10) -> str:
         """Query the device, optionally retrying transient no-response cases.
@@ -206,7 +235,11 @@ class PhAmpMB7:
         time.sleep(0.10)
 
         if ser.in_waiting:
-            ser.readline()
+            # Discard a possible acknowledgement. It may end in CR or LF.
+            try:
+                self._read_response()
+            except PhAmpProtocolError:
+                pass
 
         actual = self._query(
             query_command,
@@ -240,7 +273,12 @@ class PhAmpMB7:
     def set_format_photocurrent(self) -> None:
         self._set_and_verify("F0", "F?", "F0")
 
+    def set_internal_trigger(self) -> None:
+        """T0: measure continuously; M? returns the latest valid reading."""
+        self._set_and_verify("T0", "T?", "0")
+
     def set_software_trigger(self) -> None:
+        """T1: each M? starts one new measurement and returns that result."""
         # Tested V1.22 returns "1" for T? rather than "T1".
         self._set_and_verify("T1", "T?", "1")
 
@@ -255,7 +293,7 @@ class PhAmpMB7:
         self.integration_time_ms = milliseconds
 
     def read_current(self) -> float:
-        """Trigger one measurement and return photocurrent in amperes."""
+        """Return photocurrent in amperes using the active trigger mode."""
         response = self._query("M?")
         match = _CURRENT_RE.search(response)
         if match is None:
