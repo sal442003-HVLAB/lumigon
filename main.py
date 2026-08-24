@@ -3,7 +3,12 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QLabel, QSplashScreen
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QLabel,
+    QVBoxLayout,
+)
 
 from main_window import MainWindow
 from axis_profile_controls import attach_axis_profile_controls
@@ -18,13 +23,15 @@ from machine_config import (
 
 
 POPUP_DURATION_MS = 5000
+POPUP_MAX_WIDTH = 900
+POPUP_MAX_HEIGHT = 520
 
 
 def _find_popup_image():
     """Return the startup popup image path if present.
 
-    The user's project may use either `asset` or `assets`. The preferred base
-    filename is simply `popup`; common image extensions are accepted too.
+    The project may use either `asset` or `assets`. The preferred base filename
+    is `popup`; common image extensions are accepted too.
     """
 
     project_dir = Path(__file__).resolve().parent
@@ -48,6 +55,63 @@ def _find_popup_image():
             return path
 
     return None
+
+
+def _show_startup_popup(popup_path):
+    """Show the startup popup using the same sizing as Lumisphere.
+
+    Lumisphere scales its popup into a 900 x 520 bounding box while preserving
+    the image aspect ratio, then sizes the splash dialog to the rendered image.
+    """
+
+    if popup_path is None:
+        return
+
+    pixmap = QPixmap(str(popup_path))
+    if pixmap.isNull():
+        return
+
+    dialog = QDialog()
+    dialog.setWindowFlags(Qt.SplashScreen | Qt.WindowStaysOnTopHint)
+    dialog.setModal(True)
+    dialog.setStyleSheet(
+        """
+        QDialog {
+            background-color: #101820;
+            border: none;
+        }
+
+        QLabel {
+            background-color: #101820;
+        }
+        """
+    )
+
+    layout = QVBoxLayout(dialog)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+
+    image_label = QLabel()
+    image_label.setAlignment(Qt.AlignCenter)
+
+    scaled_pixmap = pixmap.scaled(
+        POPUP_MAX_WIDTH,
+        POPUP_MAX_HEIGHT,
+        Qt.KeepAspectRatio,
+        Qt.SmoothTransformation,
+    )
+
+    image_label.setPixmap(scaled_pixmap)
+    layout.addWidget(image_label)
+
+    dialog.adjustSize()
+
+    QTimer.singleShot(
+        POPUP_DURATION_MS,
+        dialog.accept,
+    )
+
+    dialog.exec()
 
 
 def main():
@@ -81,42 +145,11 @@ def main():
     if screen is not None:
         window.setGeometry(screen.availableGeometry())
 
-    popup_path = _find_popup_image()
-    splash = None
+    _show_startup_popup(
+        _find_popup_image()
+    )
 
-    def show_main_window():
-        window.showMaximized()
-        if splash is not None:
-            splash.finish(window)
-
-    if popup_path is not None:
-        popup_pixmap = QPixmap(str(popup_path))
-
-        if not popup_pixmap.isNull():
-            if screen is not None:
-                available = screen.availableGeometry()
-                max_width = int(available.width() * 0.90)
-                max_height = int(available.height() * 0.90)
-
-                if (
-                    popup_pixmap.width() > max_width
-                    or popup_pixmap.height() > max_height
-                ):
-                    popup_pixmap = popup_pixmap.scaled(
-                        max_width,
-                        max_height,
-                        Qt.KeepAspectRatio,
-                        Qt.SmoothTransformation,
-                    )
-
-            splash = QSplashScreen(popup_pixmap)
-            splash.show()
-            app.processEvents()
-            QTimer.singleShot(POPUP_DURATION_MS, show_main_window)
-        else:
-            show_main_window()
-    else:
-        show_main_window()
+    window.showMaximized()
 
     sys.exit(
         app.exec()
