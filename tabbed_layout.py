@@ -1,7 +1,9 @@
 from PySide6.QtWidgets import (
     QLabel,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QWidget,
 )
 from PySide6.QtCore import Qt
@@ -74,11 +76,7 @@ def _placeholder_tab(title, description):
 
 
 def organize_main_window_tabs(window):
-    """Split the commissioning HMI into functional tabs without changing logic.
-
-    Existing controls are re-used and re-parented. No servo or luxmeter command
-    behavior is changed by this function.
-    """
+    """Split the commissioning HMI into functional tabs without changing logic."""
 
     central = window.centralWidget()
     if central is None or central.layout() is None:
@@ -93,18 +91,19 @@ def organize_main_window_tabs(window):
         original_items.append(root.takeAt(0))
 
     header_item = None
+    communication_item = None
     motor_items = []
     measurement_items = []
     unclassified_items = []
+
+    connection_label = getattr(window, "connection_label", None)
 
     for item in original_items:
         widget = item.widget()
         layout = item.layout()
 
-        if layout is not None and _layout_contains_widget(
-            layout,
-            getattr(window, "connection_label", None),
-        ):
+        # Original header is the row that contains the application title/status.
+        if layout is not None and _layout_contains_widget(layout, connection_label):
             header_item = item
             continue
 
@@ -120,6 +119,7 @@ def organize_main_window_tabs(window):
             continue
 
         if widget is not None and getattr(widget, "title", lambda: "")() == "Communication":
+            communication_item = item
             motor_items.append(item)
             continue
 
@@ -137,24 +137,58 @@ def organize_main_window_tabs(window):
 
         unclassified_items.append(item)
 
-    # Lumisphere-like header proportions: full-width, about 100 px high.
-    if header_item is not None:
-        header_widget = QWidget()
-        header_widget.setObjectName("mainHeader")
-        header_widget.setFixedHeight(HEADER_HEIGHT)
+    # ------------------------------------------------------------------
+    # Full-width 100 px header.
+    # The drive connection status is intentionally removed from the header;
+    # this area is reserved for the future Lumigon graphical header artwork.
+    # ------------------------------------------------------------------
+    title = window.findChild(QLabel, "appTitle")
 
-        header_layout = QVBoxLayout(header_widget)
-        header_layout.setContentsMargins(14, 0, 14, 0)
-        header_layout.setSpacing(0)
-        _add_item(header_layout, header_item, header_widget)
-
-        title = window.findChild(QLabel, "appTitle")
+    if header_item is not None and header_item.layout() is not None:
+        old_header_layout = header_item.layout()
+        if connection_label is not None:
+            old_header_layout.removeWidget(connection_label)
+            connection_label.setParent(None)
         if title is not None:
-            title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            old_header_layout.removeWidget(title)
+            title.setParent(None)
 
-        root.addWidget(header_widget)
-        window.main_header = header_widget
+    header_widget = QWidget()
+    header_widget.setObjectName("mainHeader")
+    header_widget.setFixedHeight(HEADER_HEIGHT)
+    header_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    header_widget.setMinimumWidth(0)
+    header_widget.setMaximumWidth(16777215)
 
+    new_header_layout = QHBoxLayout(header_widget)
+    new_header_layout.setContentsMargins(18, 0, 18, 0)
+    new_header_layout.setSpacing(0)
+
+    if title is not None:
+        title.setParent(header_widget)
+        title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        new_header_layout.addWidget(title)
+
+    new_header_layout.addStretch(1)
+    root.addWidget(header_widget, 0)
+    window.main_header = header_widget
+
+    # Move drive connection status beside the existing Connect/Disconnect
+    # controls inside the Communication group instead of the header.
+    if communication_item is not None and communication_item.widget() is not None:
+        communication_box = communication_item.widget()
+        communication_layout = communication_box.layout()
+        if communication_layout is not None and connection_label is not None:
+            status_caption = QLabel("Drive status:")
+            status_caption.setObjectName("communicationStatusCaption")
+            connection_label.setParent(communication_box)
+            communication_layout.addWidget(status_caption)
+            communication_layout.addWidget(connection_label)
+            window.drive_status_caption = status_caption
+
+    # ------------------------------------------------------------------
+    # Lumisphere-style compact adjacent tab strip, retaining Lumigon colors.
+    # ------------------------------------------------------------------
     tabs = QTabWidget()
     tabs.setObjectName("mainTabs")
     tabs.setDocumentMode(True)
@@ -223,8 +257,6 @@ def organize_main_window_tabs(window):
     window.safety_tab = safety_tab
     window.settings_tab = settings_tab
 
-    # Keep Lumigon's navy/blue palette, but use Lumisphere-like proportions:
-    # compact adjacent tabs directly under a 100 px header.
     window.setStyleSheet(
         window.styleSheet()
         + """
@@ -239,6 +271,11 @@ def organize_main_window_tabs(window):
             font-weight: 700;
             color: #4DA3FF;
             padding-left: 4px;
+        }
+
+        QLabel#communicationStatusCaption {
+            color: #AAB7C4;
+            padding-left: 8px;
         }
 
         QTabWidget#mainTabs::pane {
@@ -257,7 +294,7 @@ def organize_main_window_tabs(window):
             color: #D7E1E8;
             border: 1px solid #34495E;
             border-bottom: 1px solid #34495E;
-            border-radius: 2px;
+            border-radius: 1px;
             padding: 7px 15px;
             margin: 0px 1px 0px 0px;
             min-width: 0px;
