@@ -70,9 +70,6 @@ def build_measurement_workspace(window):
     root.setContentsMargins(10, 10, 10, 10)
     root.setSpacing(8)
 
-    # ------------------------------------------------------------------
-    # Title / state
-    # ------------------------------------------------------------------
     title_row = QHBoxLayout()
 
     title_block = QVBoxLayout()
@@ -94,9 +91,6 @@ def build_measurement_workspace(window):
     title_row.addWidget(state, 0, Qt.AlignRight | Qt.AlignVCenter)
     root.addLayout(title_row)
 
-    # ------------------------------------------------------------------
-    # Top cards
-    # ------------------------------------------------------------------
     cards = QHBoxLayout()
     cards.setSpacing(10)
 
@@ -256,9 +250,6 @@ def build_measurement_workspace(window):
     cards.addWidget(acquisition_box, 3)
     root.addLayout(cards)
 
-    # ------------------------------------------------------------------
-    # Plan controls / summary
-    # ------------------------------------------------------------------
     plan_header = QHBoxLayout()
     plan_title = QLabel("Test Plan Preview")
     plan_title.setObjectName("measurementSectionTitle")
@@ -299,9 +290,6 @@ def build_measurement_workspace(window):
     plan_table.setMinimumHeight(220)
     root.addWidget(plan_table, 1)
 
-    # ------------------------------------------------------------------
-    # Execution footer
-    # ------------------------------------------------------------------
     execution_box = QGroupBox("Execution")
     execution_layout = QHBoxLayout(execution_box)
     execution_layout.setContentsMargins(10, 8, 10, 8)
@@ -417,9 +405,8 @@ def build_measurement_workspace(window):
         elif mode == SCAN_SINGLE_GAMMA_C:
             gamma_end.setValue(gamma_start.value())
 
-    def _apply_scan_mode(*_args):
+    def _refresh_scan_mode_controls():
         mode = scan_mode_combo.currentIndex()
-
         single_c = mode == SCAN_SINGLE_C_GAMMA
         single_gamma = mode == SCAN_SINGLE_GAMMA_C
         grid = mode == SCAN_GRID
@@ -428,21 +415,21 @@ def build_measurement_workspace(window):
         c_step.setEnabled(not single_c)
         gamma_end.setEnabled(not single_gamma)
         gamma_step.setEnabled(not single_gamma)
-
-        # Traversal has meaning only for a two-axis grid. Hiding it in the
-        # single-axis modes also frees enough vertical space for the safety
-        # envelope to remain fully visible.
         traversal_label.setVisible(grid)
         traversal_combo.setVisible(grid)
         traversal_combo.setEnabled(grid)
 
-        if single_c:
+    def _apply_scan_mode(*_args):
+        mode = scan_mode_combo.currentIndex()
+
+        if mode == SCAN_SINGLE_C_GAMMA:
             c_end.setValue(c_start.value())
             traversal_combo.setCurrentIndex(0)
-        elif single_gamma:
+        elif mode == SCAN_SINGLE_GAMMA_C:
             gamma_end.setValue(gamma_start.value())
             traversal_combo.setCurrentIndex(1)
 
+        _refresh_scan_mode_controls()
         _mark_dirty()
 
     def _set_editor_enabled(enabled):
@@ -470,7 +457,9 @@ def build_measurement_workspace(window):
             control.setEnabled(enabled)
 
         if enabled:
-            _apply_scan_mode()
+            # Restore mode-dependent enabled/hidden states without marking the
+            # already validated plan dirty after a completed point.
+            _refresh_scan_mode_controls()
 
     def _build_points():
         mode = scan_mode_combo.currentIndex()
@@ -772,8 +761,6 @@ def build_measurement_workspace(window):
         timer = getattr(window, "timer", None)
         main_timer_was_active = bool(timer is not None and timer.isActive())
         if main_timer_was_active:
-            # Prevent the GUI refresh timer from sharing the Modbus serial bus
-            # with the motion worker during this one-point transaction.
             timer.stop()
 
         _set_editor_enabled(False)
@@ -890,7 +877,6 @@ def build_measurement_workspace(window):
     sample_id_edit.textChanged.connect(_mark_dirty)
     use_profile_check.toggled.connect(_mark_dirty)
 
-    # Initial MIOL development view: fixed C=0°, Gamma -5°...+5°.
     _apply_scan_mode()
     build_plan()
 
