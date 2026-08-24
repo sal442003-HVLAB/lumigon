@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QLabel,
     QSizePolicy,
@@ -7,9 +9,34 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 
 
 HEADER_HEIGHT = 100
+HEADER_BASENAME = "header"
+
+
+def _resolve_header_path():
+    """Return the optional Lumigon header artwork path.
+
+    The user-facing convention is simply ``assets/header``.  Common image
+    extensions are also accepted so Windows may keep/show the real extension
+    without requiring any code change.
+    """
+
+    assets_dir = Path(__file__).resolve().parent / "assets"
+    candidates = [
+        assets_dir / HEADER_BASENAME,
+        assets_dir / f"{HEADER_BASENAME}.png",
+        assets_dir / f"{HEADER_BASENAME}.jpg",
+        assets_dir / f"{HEADER_BASENAME}.jpeg",
+        assets_dir / f"{HEADER_BASENAME}.webp",
+    ]
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _layout_contains_widget(layout, target):
@@ -149,7 +176,9 @@ def organize_main_window_tabs(window):
         unclassified_items.append(item)
 
     # ------------------------------------------------------------------
-    # Full-width 100 px header. Reserved for future Lumigon artwork.
+    # Full-width 100 px header.
+    # If assets/header (or header.png/.jpg/.jpeg/.webp) exists, it becomes the
+    # header artwork. Otherwise the simple LUMIGON text remains as a fallback.
     # ------------------------------------------------------------------
     title = window.findChild(QLabel, "appTitle")
 
@@ -170,17 +199,40 @@ def organize_main_window_tabs(window):
     header_widget.setMaximumWidth(16777215)
 
     new_header_layout = QHBoxLayout(header_widget)
-    new_header_layout.setContentsMargins(18, 0, 18, 0)
+    new_header_layout.setContentsMargins(0, 0, 0, 0)
     new_header_layout.setSpacing(0)
 
-    if title is not None:
-        title.setParent(header_widget)
-        title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        new_header_layout.addWidget(title)
+    header_path = _resolve_header_path()
+    header_label = None
 
-    new_header_layout.addStretch(1)
+    if header_path is not None:
+        pixmap = QPixmap(str(header_path))
+        if not pixmap.isNull():
+            header_label = QLabel(header_widget)
+            header_label.setObjectName("headerArtwork")
+            header_label.setFixedHeight(HEADER_HEIGHT)
+            header_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            header_label.setAlignment(Qt.AlignCenter)
+            header_label.setPixmap(pixmap)
+            # Header artwork is intentionally 1600x100. Stretch it to the
+            # current available width while preserving the fixed 100 px height.
+            header_label.setScaledContents(True)
+            new_header_layout.addWidget(header_label, 1)
+
+    if header_label is None:
+        new_header_layout.setContentsMargins(18, 0, 18, 0)
+        if title is not None:
+            title.setParent(header_widget)
+            title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            new_header_layout.addWidget(title)
+        new_header_layout.addStretch(1)
+    elif title is not None:
+        title.hide()
+
     root.addWidget(header_widget, 0)
     window.main_header = header_widget
+    window.header_artwork_label = header_label
+    window.header_artwork_path = str(header_path) if header_path is not None else None
 
     # Drive connection state lives inside Communication, not the header.
     if communication_item is not None and communication_item.widget() is not None:
@@ -205,11 +257,8 @@ def organize_main_window_tabs(window):
     tabs.tabBar().setDrawBase(False)
 
     # ------------------------------------------------------------------
-    # Motor Control: keep Communication full width, then place the four
-    # functional cards in one compact row:
+    # Motor Control: Communication full width, then compact four-card row:
     # Gamma axis | Gamma profile | C axis | C profile.
-    # This intentionally leaves the lower half of the tab available for
-    # later commissioning/status functions instead of stretching cards.
     # ------------------------------------------------------------------
     motor_tab = QWidget()
     motor_layout = QVBoxLayout(motor_tab)
@@ -320,6 +369,13 @@ def organize_main_window_tabs(window):
             background-color: #0B1420;
             border: 1px solid #1E2E3D;
             border-radius: 0px;
+        }
+
+        QLabel#headerArtwork {
+            background-color: #0B1420;
+            border: none;
+            margin: 0px;
+            padding: 0px;
         }
 
         QLabel#appTitle {
