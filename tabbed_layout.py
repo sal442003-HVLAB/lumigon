@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 
+from measurement_workspace import build_measurement_workspace
+
 
 HEADER_HEIGHT = 100
 HEADER_BASENAME = "header"
@@ -19,7 +21,7 @@ HEADER_BASENAME = "header"
 def _resolve_header_path():
     """Return the optional Lumigon header artwork path.
 
-    The user-facing convention is simply ``assets/header``.  Common image
+    The user-facing convention is simply ``assets/header``. Common image
     extensions are also accepted so Windows may keep/show the real extension
     without requiring any code change.
     """
@@ -124,7 +126,7 @@ def organize_main_window_tabs(window):
     c_profile_item = None
     zero_item = None
     notice_item = None
-    measurement_items = []
+    luxmeter_items = []
     unclassified_items = []
 
     connection_label = getattr(window, "connection_label", None)
@@ -143,7 +145,7 @@ def organize_main_window_tabs(window):
             continue
 
         if widget is getattr(window, "luxmeter_box", None):
-            measurement_items.append(item)
+            luxmeter_items.append(item)
             continue
 
         if widget is gamma_profile_box:
@@ -177,8 +179,6 @@ def organize_main_window_tabs(window):
 
     # ------------------------------------------------------------------
     # Full-width 100 px header.
-    # If assets/header (or header.png/.jpg/.jpeg/.webp) exists, it becomes the
-    # header artwork. Otherwise the simple LUMIGON text remains as a fallback.
     # ------------------------------------------------------------------
     title = window.findChild(QLabel, "appTitle")
 
@@ -214,8 +214,6 @@ def organize_main_window_tabs(window):
             header_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             header_label.setAlignment(Qt.AlignCenter)
             header_label.setPixmap(pixmap)
-            # Header artwork is intentionally 1600x100. Stretch it to the
-            # current available width while preserving the fixed 100 px height.
             header_label.setScaledContents(True)
             new_header_layout.addWidget(header_label, 1)
 
@@ -257,8 +255,7 @@ def organize_main_window_tabs(window):
     tabs.tabBar().setDrawBase(False)
 
     # ------------------------------------------------------------------
-    # Motor Control: Communication full width, then compact four-card row:
-    # Gamma axis | Gamma profile | C axis | C profile.
+    # Motor Control
     # ------------------------------------------------------------------
     motor_tab = QWidget()
     motor_layout = QVBoxLayout(motor_tab)
@@ -312,22 +309,31 @@ def organize_main_window_tabs(window):
 
     motor_layout.addStretch(1)
 
-    measurement_tab = QWidget()
-    measurement_layout = QVBoxLayout(measurement_tab)
-    measurement_layout.setContentsMargins(8, 8, 8, 8)
-    measurement_layout.setSpacing(10)
+    # ------------------------------------------------------------------
+    # Luxmeter: instrument control only.
+    # ------------------------------------------------------------------
+    luxmeter_tab = QWidget()
+    luxmeter_layout = QVBoxLayout(luxmeter_tab)
+    luxmeter_layout.setContentsMargins(8, 8, 8, 8)
+    luxmeter_layout.setSpacing(10)
 
-    for item in measurement_items:
-        _add_item(measurement_layout, item, measurement_tab)
+    for item in luxmeter_items:
+        _add_item(luxmeter_layout, item, luxmeter_tab)
 
-    measurement_info = QLabel(
-        "Measurement workspace — manual/live illuminance, measurement sequence, "
-        "angle stepping and synchronized acquisition will be developed here."
+    luxmeter_info = QLabel(
+        "Instrument workspace — connect and diagnose the C&G Ph-Amp MB7, "
+        "read photocurrent/Lux, tune integration time and use Live acquisition."
     )
-    measurement_info.setWordWrap(True)
-    measurement_info.setObjectName("tabPlaceholder")
-    measurement_layout.addWidget(measurement_info)
-    measurement_layout.addStretch()
+    luxmeter_info.setWordWrap(True)
+    luxmeter_info.setObjectName("tabPlaceholder")
+    luxmeter_layout.addWidget(luxmeter_info)
+    luxmeter_layout.addStretch()
+
+    # ------------------------------------------------------------------
+    # Measurement: profile-driven test definition and plan preview.
+    # No axis movement is connected in this first stage.
+    # ------------------------------------------------------------------
+    measurement_tab = build_measurement_workspace(window)
 
     results_tab = _placeholder_tab(
         "Results",
@@ -348,6 +354,7 @@ def organize_main_window_tabs(window):
     )
 
     tabs.addTab(motor_tab, "Motor Control")
+    tabs.addTab(luxmeter_tab, "Luxmeter")
     tabs.addTab(measurement_tab, "Measurement")
     tabs.addTab(results_tab, "Results")
     tabs.addTab(safety_tab, "Safety & I/O")
@@ -357,6 +364,7 @@ def organize_main_window_tabs(window):
 
     window.main_tabs = tabs
     window.motor_tab = motor_tab
+    window.luxmeter_tab = luxmeter_tab
     window.measurement_tab = measurement_tab
     window.results_tab = results_tab
     window.safety_tab = safety_tab
@@ -439,6 +447,86 @@ def organize_main_window_tabs(window):
             border: 1px solid #34495E;
             border-radius: 6px;
             padding: 12px;
+        }
+
+        QWidget#measurementWorkspace {
+            background-color: #101820;
+        }
+
+        QLabel#measurementTitle {
+            color: #E9F3FA;
+            font-size: 18pt;
+            font-weight: 700;
+        }
+
+        QLabel#measurementSubtitle {
+            color: #7F98AA;
+            padding-bottom: 2px;
+        }
+
+        QLabel#measurementSectionTitle {
+            color: #4DA3FF;
+            font-size: 12pt;
+            font-weight: 700;
+        }
+
+        QLabel#measurementStateDraft,
+        QLabel#measurementStateValid,
+        QLabel#measurementStateInvalid {
+            border-radius: 12px;
+            padding: 7px 12px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+
+        QLabel#measurementStateDraft {
+            color: #9DB4C4;
+            background-color: #1B2934;
+            border: 1px solid #3B5365;
+        }
+
+        QLabel#measurementStateValid {
+            color: #BFE7C8;
+            background-color: #173226;
+            border: 1px solid #2E7D4B;
+        }
+
+        QLabel#measurementStateInvalid {
+            color: #FFC9C9;
+            background-color: #3A1F24;
+            border: 1px solid #9C3D49;
+        }
+
+        QLabel#measurementEnvelope {
+            color: #8AB8D6;
+            background-color: #132431;
+            border: 1px solid #24465C;
+            border-radius: 5px;
+            padding: 7px;
+        }
+
+        QLabel#measurementEngineNote {
+            color: #7890A0;
+            padding: 4px 6px;
+        }
+
+        QTableWidget#measurementPlanTable {
+            background-color: #111B23;
+            alternate-background-color: #15232D;
+            border: 1px solid #34495E;
+            gridline-color: #263B4B;
+            color: #DCE7EE;
+            selection-background-color: #185D8C;
+        }
+
+        QTableWidget#measurementPlanTable QHeaderView::section {
+            background-color: #182833;
+            color: #AFC6D5;
+            border: 0px;
+            border-right: 1px solid #304655;
+            border-bottom: 1px solid #304655;
+            padding: 7px;
+            font-weight: 600;
         }
         """
     )
