@@ -27,19 +27,25 @@ DEFAULT_LIVE_INTERVAL_MS = 100
 
 
 class LuxmeterLiveWorker(QThread):
-    """Read single Ph-Amp samples continuously without blocking the GUI thread."""
+    """Poll the latest Ph-Amp reading continuously without blocking the GUI."""
 
-    reading_ready = Signal(float, float)
+    reading_ready = Signal(float, float, float)
     read_error = Signal(str)
 
-    def __init__(self, meter, interval_ms, parent=None):
+    def __init__(self, meter, interval_ms, warmup_ms=0, parent=None):
         super().__init__(parent)
         self.meter = meter
         self.interval_ms = int(interval_ms)
+        self.warmup_ms = max(0, int(warmup_ms))
 
     def run(self):
+        if self.warmup_ms:
+            self.msleep(self.warmup_ms)
+
+        last_emit_time = None
+
         while not self.isInterruptionRequested():
-            started = time.monotonic()
+            cycle_started = time.monotonic()
 
             try:
                 current_a = self.meter.read_current()
@@ -48,17 +54,23 @@ class LuxmeterLiveWorker(QThread):
                 self.read_error.emit(str(exc))
                 return
 
-            if self.isInterruptionRequested():
-                break
+            now = time.monotonic()
+            if last_emit_time is None:
+                actual_interval_ms = 0.0
+            else:
+                actual_interval_ms = (now - last_emit_time) * 1000.0
+            last_emit_time = now
 
-            self.reading_ready.emit(current_a, lux)
+            self.reading_ready.emit(current_a, lux, actual_interval_ms)
 
-            elapsed_ms = int((time.monotonic() - started) * 1000.0)
-            remaining_ms = max(0, self.interval_ms - elapsed_ms)
+            elapsed_ms = (time.monotonic() - cycle_started) * 1000.0
+            remaining_ms = max(0.0, self.interval_ms - elapsed_ms)
 
             # Sleep in short pieces so Stop Live reacts promptly.
             while remaining_ms > 0 and not self.isInterruptionRequested():
-                chunk_ms = min(20, remaining_ms)
+                chunk_ms = min(10, int(remaining_ms))
+                if chunk_ms <= 0:
+                    break
                 self.msleep(chunk_ms)
                 remaining_ms -= chunk_ms
 
@@ -144,7 +156,7 @@ def attach_luxmeter_controls(window):
     layout.addWidget(read_button, 2, 0)
     layout.addWidget(start_live_button, 2, 1)
     layout.addWidget(stop_live_button, 2, 2)
-    layout.addWidget(QLabel("Live interval:"), 2, 3)
+    layout.addWidget(QLabel("Poll interval:"), 2, 3)
     layout.addWidget(live_interval_spin, 2, 4)
     layout.addWidget(live_status_label, 2, 5)
 
@@ -160,13 +172,10 @@ def attach_luxmeter_controls(window):
         label.style().polish(label)
 
     def _live_worker():
-        """Return the current worker from creation until its finished slot clears it."""
         worker = getattr(window, "luxmeter_live_worker", None)
-        if worker is None:
-            return None
-        if worker.isFinished():
-            return None
-        return worker
+        if worker is not None and worker.isRunning():
+            return worker
+        return None
 
     def _update_controls():
         meter = getattr(window, "luxmeter", None)
@@ -222,8 +231,7 @@ def attach_luxmeter_controls(window):
         worker.requestInterruption()
 
         if wait:
-            # A serial read can remain blocked until the driver's serial timeout.
-            if not worker.wait(3000):
+            if not worker.wait(1000):
                 return False
 
         return True
@@ -292,6 +300,7 @@ def attach_luxmeter_controls(window):
 
         try:
             _apply_measurement_settings(meter)
+            meter.set_software_trigger()
             reading = meter.read_lux(samples=samples_spin.value())
         except (PhAmpError, ValueError) as exc:
             QMessageBox.critical(window, "Luxmeter Read Error", str(exc))
@@ -308,14 +317,22 @@ def attach_luxmeter_controls(window):
         window.luxmeter_last_current_a = reading.mean_current_a
         window.luxmeter_last_lux = reading.lux
 
-    def _update_live_reading(current_a, lux):
+    def _update_live_reading(current_a, lux, actual_interval_ms):
         current_na = current_a * 1e9
         current_label.setText(f"Current: {current_na:.2f} nA")
         lux_label.setText(f"Lux: {lux:.3f} lx")
 
+        if actual_interval_ms > 0:
+            live_status_label.setText(
+                f"Live: Running | actual {actual_interval_ms:.0f} ms"
+            )
+        else:
+            live_status_label.setText("Live: Running")
+
         window.luxmeter_last_current_a = current_a
         window.luxmeter_last_lux = lux
         window.luxmeter_last_live_timestamp = time.time()
+        window.luxmeter_last_live_interval_ms = actual_interval_ms
 
     def _live_error(message):
         live_status_label.setText("Live: Error")
@@ -327,8 +344,20 @@ def attach_luxmeter_controls(window):
             worker.deleteLater()
         window.luxmeter_live_worker = None
 
+        meter = getattr(window, "luxmeter", None)
+        restore_error = None
+        if meter is not None and meter.is_connected:
+            try:
+                # Formal Read Lux uses T1 so every M? acquires a fresh sample.
+                meter.set_software_trigger()
+            except Exception as exc:
+                restore_error = str(exc)
+
         if live_status_label.text() != "Live: Error":
-            live_status_label.setText("Live: Stopped")
+            if restore_error:
+                live_status_label.setText("Live: Stopped | T1 restore error")
+            else:
+                live_status_label.setText("Live: Stopped")
         _update_controls()
 
     def start_live():
@@ -342,6 +371,11 @@ def attach_luxmeter_controls(window):
 
         try:
             _apply_measurement_settings(meter)
+
+            # T0 is the correct mode for a real-time display: the Ph-Amp measures
+            # continuously and M? returns the latest completed reading instead of
+            # starting a brand-new integration for every UI refresh.
+            meter.set_internal_trigger()
         except (PhAmpError, ValueError) as exc:
             QMessageBox.critical(window, "Luxmeter Live Setup Error", str(exc))
             return
@@ -352,6 +386,7 @@ def attach_luxmeter_controls(window):
         worker = LuxmeterLiveWorker(
             meter,
             interval_ms=live_interval_spin.value(),
+            warmup_ms=meter.integration_time_ms + 10,
             parent=window,
         )
         worker.reading_ready.connect(_update_live_reading)
@@ -359,11 +394,9 @@ def attach_luxmeter_controls(window):
         worker.finished.connect(_live_finished)
 
         window.luxmeter_live_worker = worker
-        live_status_label.setText("Live: Running")
-        stability_label.setText("Std. dev.: — (Live uses single samples)")
+        live_status_label.setText("Live: Starting…")
+        stability_label.setText("Std. dev.: — (Live uses latest continuous sample)")
 
-        # Start first, then update the controls. The previous ordering checked
-        # isRunning() before start and could leave Stop Live disabled.
         worker.start()
         _update_controls()
 
@@ -375,10 +408,6 @@ def attach_luxmeter_controls(window):
             return
 
         live_status_label.setText("Live: Stopping…")
-        stop_live_button.setEnabled(False)
-
-        # Do not block the GUI while a serial read is finishing. The worker will
-        # emit finished, then _live_finished() restores the controls.
         worker.requestInterruption()
 
     refresh_ports_button.clicked.connect(refresh_ports)
@@ -413,5 +442,6 @@ def attach_luxmeter_controls(window):
     window.luxmeter_last_current_a = None
     window.luxmeter_last_lux = None
     window.luxmeter_last_live_timestamp = None
+    window.luxmeter_last_live_interval_ms = None
 
     _update_controls()
