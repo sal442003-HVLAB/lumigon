@@ -23,7 +23,7 @@ from phamp_mb7 import (
 
 DEFAULT_LUXMETER_PORT = "COM9"
 DEFAULT_SAMPLES = 5
-DEFAULT_LIVE_INTERVAL_MS = 300
+DEFAULT_LIVE_INTERVAL_MS = 100
 
 
 class LuxmeterLiveWorker(QThread):
@@ -48,6 +48,9 @@ class LuxmeterLiveWorker(QThread):
                 self.read_error.emit(str(exc))
                 return
 
+            if self.isInterruptionRequested():
+                break
+
             self.reading_ready.emit(current_a, lux)
 
             elapsed_ms = int((time.monotonic() - started) * 1000.0)
@@ -55,7 +58,7 @@ class LuxmeterLiveWorker(QThread):
 
             # Sleep in short pieces so Stop Live reacts promptly.
             while remaining_ms > 0 and not self.isInterruptionRequested():
-                chunk_ms = min(50, remaining_ms)
+                chunk_ms = min(20, remaining_ms)
                 self.msleep(chunk_ms)
                 remaining_ms -= chunk_ms
 
@@ -111,8 +114,8 @@ def attach_luxmeter_controls(window):
     integration_spin.setValue(DEFAULT_INTEGRATION_TIME_MS)
 
     live_interval_spin = QSpinBox()
-    live_interval_spin.setRange(100, 5000)
-    live_interval_spin.setSingleStep(100)
+    live_interval_spin.setRange(10, 5000)
+    live_interval_spin.setSingleStep(10)
     live_interval_spin.setSuffix(" ms")
     live_interval_spin.setValue(DEFAULT_LIVE_INTERVAL_MS)
 
@@ -157,10 +160,13 @@ def attach_luxmeter_controls(window):
         label.style().polish(label)
 
     def _live_worker():
+        """Return the current worker from creation until its finished slot clears it."""
         worker = getattr(window, "luxmeter_live_worker", None)
-        if worker is not None and worker.isRunning():
-            return worker
-        return None
+        if worker is None:
+            return None
+        if worker.isFinished():
+            return None
+        return worker
 
     def _update_controls():
         meter = getattr(window, "luxmeter", None)
@@ -216,7 +222,7 @@ def attach_luxmeter_controls(window):
         worker.requestInterruption()
 
         if wait:
-            # A serial read may remain blocked until the 2 s driver timeout.
+            # A serial read can remain blocked until the driver's serial timeout.
             if not worker.wait(3000):
                 return False
 
@@ -355,18 +361,25 @@ def attach_luxmeter_controls(window):
         window.luxmeter_live_worker = worker
         live_status_label.setText("Live: Running")
         stability_label.setText("Std. dev.: — (Live uses single samples)")
-        _update_controls()
+
+        # Start first, then update the controls. The previous ordering checked
+        # isRunning() before start and could leave Stop Live disabled.
         worker.start()
+        _update_controls()
 
     def stop_live():
+        worker = _live_worker()
+        if worker is None:
+            live_status_label.setText("Live: Stopped")
+            _update_controls()
+            return
+
         live_status_label.setText("Live: Stopping…")
-        if not _stop_live(wait=True):
-            live_status_label.setText("Live: Stop timeout")
-            QMessageBox.warning(
-                window,
-                "Luxmeter Live",
-                "Live acquisition did not stop within 3 seconds.",
-            )
+        stop_live_button.setEnabled(False)
+
+        # Do not block the GUI while a serial read is finishing. The worker will
+        # emit finished, then _live_finished() restores the controls.
+        worker.requestInterruption()
 
     refresh_ports_button.clicked.connect(refresh_ports)
     connect_button.clicked.connect(connect_luxmeter)
