@@ -199,19 +199,19 @@ def configure_photometric_polar(axis, values=(), *, relative=False):
                 zorder=4,
             )
 
-    # Radial values are placed on the optical axis with a background patch so
-    # they remain readable and do not collide with construction lines. The
-    # smallest and outermost rings are omitted when possible, matching common
-    # photometric-report practice and avoiding the clutter seen in raw polar axes.
+    # Keep the radial values close to the optical axis, but offset them just
+    # enough that they do not sit directly on top of the centre construction
+    # line or a narrow native measurement curve.
     label_rings = rings[1:-1] if len(rings) >= 4 else rings[:-1]
+    label_x = 0.022 * x_extent
     for radius in label_rings:
         axis.text(
-            0.0,
+            label_x,
             -radius,
             f"{radius:g}",
             color=TICK_COLOR,
             fontsize=10,
-            ha="center",
+            ha="left",
             va="center",
             bbox={
                 "boxstyle": "square,pad=0.10",
@@ -266,25 +266,35 @@ def finish_photometric_figure(figure, *, unit="", title=""):
             title,
             color=TITLE_COLOR,
             fontweight="bold",
-            fontsize=12,
-            y=0.965,
+            fontsize=11.5,
+            y=0.975,
         )
-    if unit:
-        figure.text(
-            0.058,
-            0.072,
+
+    axis = figure.axes[0] if figure.axes else None
+    if unit and axis is not None:
+        # Anchor the unit to the lower-left corner of the actual photometric
+        # frame rather than to the Figure canvas, so it stays attached to the
+        # plot when Results is resized or scrolled.
+        axis.text(
+            0.012,
+            0.018,
             unit,
+            transform=axis.transAxes,
             color=UNIT_COLOR,
             fontsize=10,
             ha="left",
             va="bottom",
             bbox={
-                "boxstyle": "square,pad=0.18",
+                "boxstyle": "square,pad=0.16",
                 "facecolor": AXIS_BACKGROUND,
                 "edgecolor": SPINE_COLOR,
-                "linewidth": 0.8,
+                "linewidth": 0.75,
+                "alpha": 0.96,
             },
+            zorder=8,
         )
-    # Wide report framing gives the custom polar construction enough horizontal
-    # space without allowing the canvas to dictate the HMI window geometry.
-    figure.subplots_adjust(left=0.055, right=0.965, bottom=0.105, top=0.90)
+
+    # Use nearly the whole canvas. The Results tab already owns an isolated
+    # scroll viewport, so the plot can be comfortably tall without influencing
+    # the main Lumigon window geometry.
+    figure.subplots_adjust(left=0.018, right=0.988, bottom=0.035, top=0.925)
