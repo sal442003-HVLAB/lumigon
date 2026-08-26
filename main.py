@@ -27,6 +27,7 @@ from results_workspace import attach_results_workspace
 from results_viewport_fix import attach_results_viewport_fix
 from luxmeter_resilience import install_phamp_connect_retry
 from miol_profile_runtime import attach_miol_profile_runtime
+from miol_capture_monitor import attach_miol_capture_monitor
 from miol_results_runtime import attach_miol_results_runtime
 
 from machine_config import (
@@ -205,6 +206,7 @@ def main():
     attach_execution_mode_controls(window)
     attach_measurement_ui_fixes(window)
     attach_miol_profile_runtime(window)
+    attach_miol_capture_monitor(window)
     attach_grid_step_runtime(window)
     attach_grid_validation_ui(window)
 
