@@ -16,6 +16,12 @@ from measurement_run import build_measurement_run, save_measurement_run_csv
 from test_plan_workspace import TestPlanWorkspace
 
 
+def _fmt_optional(value, unit="", decimals=3):
+    if value is None:
+        return "—"
+    return f"{value:.{decimals}f}{unit}"
+
+
 def install_measurement_results_runtime():
     if getattr(TestPlanWorkspace, "_results_runtime_installed", False):
         return
@@ -33,6 +39,10 @@ def install_measurement_results_runtime():
         self._archive_execution_mode = mode_text
         self._archive_motion_only = bool(motion_only)
         self._archive_done = False
+
+        # A Home warning belongs only to the run that produced it.
+        if hasattr(self, "_home_return_failed"):
+            self._home_return_failed = None
 
         return original_begin_run(
             self,
@@ -62,7 +72,7 @@ def install_measurement_results_runtime():
         box.setInformativeText(
             f"Measured points: {run.point_count}\n"
             f"Duration: {run.duration_s:.1f} s\n"
-            f"Maximum Lux: {run.max_lux:.3f} lx\n"
+            f"Maximum Lux: {_fmt_optional(run.max_lux, ' lx', 3)}\n"
             f"Peak Candela: {peak_text}\n"
             f"Home: {run.home_status}\n\n"
             f"CSV: {csv_text}"
