@@ -18,9 +18,22 @@ APPLICATION_CATALOG = {
         "standard": ICAO_ANNEX_14,
         "products": {
             "Obstacle Light": [
+                # Low-intensity obstacle lights. Detailed LIOL acquisition and
+                # compliance logic will be added family-by-family; the short
+                # LIOL-A naming also keeps the current MIOL Type parser isolated.
+                "LIOL-A — ICAO Annex 14",
+                "LIOL-B — ICAO Annex 14",
+                "LIOL-C — ICAO Annex 14",
+                "LIOL-D — ICAO Annex 14",
+                "LIOL-E — ICAO Annex 14",
+                # Medium-intensity profiles are the active implementation.
                 "MIOL Type A — ICAO Annex 14",
                 "MIOL Type B — ICAO Annex 14",
                 "MIOL Type C — ICAO Annex 14",
+                # High-intensity obstacle lights. Detailed HIOL acquisition and
+                # compliance logic will be implemented after the MIOL profile.
+                "HIOL-A — ICAO Annex 14",
+                "HIOL-B — ICAO Annex 14",
             ],
             "Airfield Ground Light": [
                 "Airfield Ground Light — ICAO Annex 14",
