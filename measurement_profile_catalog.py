@@ -1,7 +1,7 @@
 """Application-driven Product/Profile/Standard filtering for Lumigon Measurement.
 
 The Measurement page should only expose definitions that belong to the selected
-application.  Standards are intentionally concise in the Test Definition card;
+application. Standards are intentionally concise in the Test Definition card;
 profile-specific clauses, tables and calculation details belong in the profile
 panel and Results workspace instead.
 """
@@ -83,7 +83,7 @@ def attach_measurement_profile_catalog(window):
     product = getattr(window, "measurement_product_combo", None)
     profile = getattr(window, "measurement_profile_combo", None)
     standard = getattr(window, "measurement_standard_edit", None)
-    if None in (application, product, profile, standard):
+    if any(control is None for control in (application, product, profile, standard)):
         raise RuntimeError("Measurement Test Definition controls are not available.")
 
     state = {
@@ -98,6 +98,21 @@ def attach_measurement_profile_catalog(window):
         # signal. Emit once after a blocked catalog rebuild so they refresh
         # validation state and profile-specific controls using the final item.
         combo.currentIndexChanged.emit(combo.currentIndex())
+
+    def _apply_authoritative_standard():
+        app_name = application.currentText()
+        if app_name == CUSTOM_APPLICATION:
+            standard.setReadOnly(False)
+            standard.setPlaceholderText("Enter standard / method (optional)")
+            standard.setText(state["custom_standard"])
+            return
+
+        catalog = APPLICATION_CATALOG.get(app_name)
+        if catalog is None:
+            return
+        standard.setReadOnly(True)
+        standard.setPlaceholderText("")
+        standard.setText(catalog["standard"])
 
     def _configure_custom():
         product.blockSignals(True)
@@ -116,10 +131,6 @@ def attach_measurement_profile_catalog(window):
         profile.setEditText(state["custom_profile"])
         profile.blockSignals(False)
 
-        standard.setReadOnly(False)
-        standard.setPlaceholderText("Enter standard / method (optional)")
-        standard.setText(state["custom_standard"])
-
         _emit_combo_change(product)
         _emit_combo_change(profile)
 
@@ -134,10 +145,6 @@ def attach_measurement_profile_catalog(window):
         selected_product = product.currentText()
         allowed_profiles = products.get(selected_product, [])
         _set_combo_items(profile, allowed_profiles, previous_profile)
-
-        standard.setReadOnly(True)
-        standard.setPlaceholderText("")
-        standard.setText(catalog["standard"])
 
         _emit_combo_change(product)
         _emit_combo_change(profile)
@@ -154,6 +161,9 @@ def attach_measurement_profile_catalog(window):
                 _configure_predefined(app_name)
         finally:
             state["syncing"] = False
+        # MIOL/profile callbacks invoked above may have written a detailed
+        # standard string. The application-level Standard field is authoritative.
+        _apply_authoritative_standard()
 
     def sync_product(*_args):
         if state["syncing"] or application.currentText() == CUSTOM_APPLICATION:
@@ -168,24 +178,17 @@ def attach_measurement_profile_catalog(window):
             allowed_profiles = catalog["products"].get(product.currentText(), [])
             previous_profile = profile.currentText()
             _set_combo_items(profile, allowed_profiles, previous_profile)
-            standard.setReadOnly(True)
-            standard.setText(catalog["standard"])
             _emit_combo_change(profile)
         finally:
             state["syncing"] = False
+        _apply_authoritative_standard()
 
     def sync_standard(*_args):
-        """Keep predefined Standard concise after profile/condition callbacks."""
+        """Keep the Test Definition Standard concise after profile callbacks."""
 
         if state["syncing"]:
             return
-        app_name = application.currentText()
-        if app_name == CUSTOM_APPLICATION:
-            return
-        catalog = APPLICATION_CATALOG.get(app_name)
-        if catalog is not None:
-            standard.setReadOnly(True)
-            standard.setText(catalog["standard"])
+        _apply_authoritative_standard()
 
     def remember_custom_product(text):
         if application.currentText() == CUSTOM_APPLICATION and not state["syncing"]:
@@ -206,9 +209,9 @@ def attach_measurement_profile_catalog(window):
     profile.currentTextChanged.connect(remember_custom_profile)
     standard.textChanged.connect(remember_custom_standard)
 
-    # MIOL operating-condition changes rewrite the Standard field as part of
-    # their detailed profile refresh. The Test Definition standard should stay
-    # concise, so normalize it after that existing callback has run.
+    # MIOL operating-condition changes write detailed text to Standard as part
+    # of the profile refresh. Normalize it back to the concise application-level
+    # reference after that existing callback has completed.
     condition = getattr(window, "measurement_miol_condition_combo", None)
     if condition is not None:
         condition.currentIndexChanged.connect(sync_standard)
