@@ -1,8 +1,8 @@
 """Results workspace for Lumigon measurement runs.
 
-Phase 1 deliberately avoids another large point table.  It presents the latest
-run summary and keeps the quantity selector ready for the next plotting phase
-(Polar / Cartesian / Heatmap / 3D distribution).
+The Results tab is deliberately driven by MeasurementRun rather than by the
+Measurement table. Saved CSV files can therefore be reopened later and use the
+same Polar/Cartesian analysis as a newly completed run.
 """
 
 from __future__ import annotations
@@ -11,16 +11,20 @@ from PySide6.QtCore import QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from measurement_run import MeasurementRun, measurement_data_directory
+from measurement_run_io import load_measurement_run_csv
+from results_charts import ResultsCharts, beam_metrics, extract_single_axis_series
 
 
 def _fmt(value, unit="", decimals=3):
@@ -45,13 +49,17 @@ class ResultsWorkspace(QWidget):
         title = QLabel("Results")
         title.setObjectName("resultsTitle")
         subtitle = QLabel(
-            "Saved photometric runs and analysis — Polar, Cartesian, Heatmap and 3D will use this same run data."
+            "Photometric analysis from the active Measurement Run or a previously saved Lumigon CSV."
         )
         subtitle.setObjectName("resultsSubtitle")
         subtitle.setWordWrap(True)
         title_block.addWidget(title)
         title_block.addWidget(subtitle)
         header.addLayout(title_block, 1)
+
+        self.load_csv_button = QPushButton("Load CSV")
+        self.load_csv_button.clicked.connect(self.load_csv)
+        header.addWidget(self.load_csv_button, 0, Qt.AlignVCenter)
 
         self.open_folder_button = QPushButton("Open Data Folder")
         self.open_folder_button.setObjectName("secondaryActionButton")
@@ -60,18 +68,18 @@ class ResultsWorkspace(QWidget):
         root.addLayout(header)
 
         self.empty_label = QLabel(
-            "No completed photometric measurement is available yet.\n"
-            "After a successful Measurement run, Lumigon will save the full run automatically and show it here."
+            "No photometric measurement is loaded yet.\n"
+            "Complete a Measurement run or use Load CSV to reopen a saved Lumigon result."
         )
         self.empty_label.setObjectName("resultsEmptyState")
         self.empty_label.setWordWrap(True)
         root.addWidget(self.empty_label)
 
-        summary_box = QGroupBox("Latest Measurement Run")
+        summary_box = QGroupBox("Measurement Run")
         summary_form = QFormLayout(summary_box)
         summary_form.setContentsMargins(12, 12, 12, 12)
         summary_form.setHorizontalSpacing(18)
-        summary_form.setVerticalSpacing(8)
+        summary_form.setVerticalSpacing(6)
 
         self.run_id_label = QLabel("—")
         self.sample_label = QLabel("—")
@@ -97,26 +105,30 @@ class ResultsWorkspace(QWidget):
         metrics_form = QFormLayout(metrics_box)
         metrics_form.setContentsMargins(12, 12, 12, 12)
         metrics_form.setHorizontalSpacing(18)
-        metrics_form.setVerticalSpacing(8)
+        metrics_form.setVerticalSpacing(6)
 
         self.max_lux_label = QLabel("—")
         self.max_candela_label = QLabel("—")
         self.max_current_label = QLabel("—")
         self.peak_angle_label = QLabel("—")
+        self.mean_candela_label = QLabel("—")
+        self.fwhm_label = QLabel("—")
 
         metrics_form.addRow("Maximum Lux:", self.max_lux_label)
         metrics_form.addRow("Maximum Candela:", self.max_candela_label)
         metrics_form.addRow("Maximum photocurrent:", self.max_current_label)
         metrics_form.addRow("Peak Candela position:", self.peak_angle_label)
+        metrics_form.addRow("Mean Candela:", self.mean_candela_label)
+        metrics_form.addRow("50% beam width (FWHM):", self.fwhm_label)
 
-        row = QHBoxLayout()
-        row.addWidget(summary_box, 3)
-        row.addWidget(metrics_box, 2)
-        root.addLayout(row)
+        summary_row = QHBoxLayout()
+        summary_row.addWidget(summary_box, 3)
+        summary_row.addWidget(metrics_box, 2)
+        root.addLayout(summary_row)
 
         analysis_box = QGroupBox("Analysis")
         analysis_layout = QHBoxLayout(analysis_box)
-        analysis_layout.setContentsMargins(12, 10, 12, 10)
+        analysis_layout.setContentsMargins(12, 8, 12, 8)
         analysis_layout.setSpacing(10)
 
         analysis_layout.addWidget(QLabel("Display quantity:"))
@@ -126,16 +138,25 @@ class ResultsWorkspace(QWidget):
             "Lux",
             "Photocurrent",
         ])
+        self.quantity_combo.currentTextChanged.connect(self._quantity_changed)
         analysis_layout.addWidget(self.quantity_combo)
 
         self.analysis_note = QLabel(
-            "Next phase: Polar + Cartesian for single-axis runs; Heatmap + selectable C/Gamma planes + 3D distribution for C × Gamma runs."
+            "Candela is the default photometric quantity. Polar and Cartesian views use the same measured points."
         )
         self.analysis_note.setObjectName("resultsAnalysisNote")
         self.analysis_note.setWordWrap(True)
         analysis_layout.addWidget(self.analysis_note, 1)
+
+        self.export_plot_button = QPushButton("Export Plot")
+        self.export_plot_button.setObjectName("secondaryActionButton")
+        self.export_plot_button.clicked.connect(self.export_plot)
+        analysis_layout.addWidget(self.export_plot_button)
         root.addWidget(analysis_box)
-        root.addStretch(1)
+
+        self.charts = ResultsCharts(self)
+        self.charts.setMinimumHeight(360)
+        root.addWidget(self.charts, 1)
 
         self.summary_box = summary_box
         self.metrics_box = metrics_box
@@ -162,7 +183,8 @@ class ResultsWorkspace(QWidget):
                 border-radius: 6px;
                 padding: 18px;
             }
-            QLabel#resultsAnalysisNote {
+            QLabel#resultsAnalysisNote,
+            QLabel#resultsChartNote {
                 color: #8AA8BC;
                 padding-left: 8px;
             }
@@ -174,6 +196,7 @@ class ResultsWorkspace(QWidget):
         self.summary_box.setVisible(visible)
         self.metrics_box.setVisible(visible)
         self.analysis_box.setVisible(visible)
+        self.charts.setVisible(visible)
 
     def set_run(self, run: MeasurementRun):
         self.latest_run = run
@@ -208,6 +231,99 @@ class ResultsWorkspace(QWidget):
         else:
             self.peak_angle_label.setText(
                 f"C {peak.c_deg:+.3f}° • Gamma {peak.gamma_deg:+.3f}°"
+            )
+
+        candela_series = extract_single_axis_series(run, "Candela")
+        metrics = beam_metrics(candela_series)
+        self.mean_candela_label.setText(_fmt(metrics.mean_value, " cd", 1))
+        if metrics.fwhm_deg is None:
+            self.fwhm_label.setText("Not resolved in measured angular range")
+        else:
+            self.fwhm_label.setText(f"{metrics.fwhm_deg:.2f}°")
+
+        self.charts.set_run(run)
+        self.charts.set_quantity(self.quantity_combo.currentText())
+        self._update_analysis_note()
+
+    def _quantity_changed(self, text):
+        self.charts.set_quantity(text)
+        self._update_analysis_note()
+
+    def _update_analysis_note(self):
+        if self.latest_run is None:
+            return
+        series = extract_single_axis_series(
+            self.latest_run,
+            self.quantity_combo.currentText(),
+        )
+        if series is None:
+            self.analysis_note.setText(
+                "C × Gamma data detected. Heatmap, selectable photometric planes and 3D distribution will use this same run model in the grid phase."
+            )
+        else:
+            self.analysis_note.setText(
+                f"{series.axis_name} is the sweep axis; {series.fixed_axis_name} = {series.fixed_angle:+.3f}°. Plot values are sorted by physical angle, independent of scan direction."
+            )
+
+    def load_csv(self):
+        directory = measurement_data_directory()
+        directory.mkdir(parents=True, exist_ok=True)
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Lumigon Measurement CSV",
+            str(directory),
+            "Lumigon CSV (*.csv);;CSV files (*.csv);;All files (*.*)",
+        )
+        if not filename:
+            return
+
+        try:
+            run = load_measurement_run_csv(filename)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Load Measurement CSV",
+                f"Could not load the selected measurement file:\n\n{exc}",
+            )
+            return
+
+        runs = getattr(self.host_window, "measurement_runs", None)
+        if runs is None:
+            runs = []
+            self.host_window.measurement_runs = runs
+        runs.append(run)
+        self.host_window.latest_measurement_run = run
+        self.set_run(run)
+
+    def export_plot(self):
+        if self.latest_run is None:
+            return
+
+        directory = measurement_data_directory()
+        directory.mkdir(parents=True, exist_ok=True)
+        default_name = (
+            f"{self.latest_run.sample_id}_{self.quantity_combo.currentText()}_plot.png"
+        )
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Result Plot",
+            str(directory / default_name),
+            "PNG image (*.png);;PDF (*.pdf);;SVG (*.svg)",
+        )
+        if not filename:
+            return
+
+        try:
+            self.charts.active_figure().savefig(
+                filename,
+                dpi=180,
+                bbox_inches="tight",
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Export Plot",
+                f"Could not export the plot:\n\n{exc}",
             )
 
     def open_data_folder(self):
