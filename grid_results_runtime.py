@@ -11,6 +11,7 @@ import math
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QSizePolicy
 
+from grid_results_visual_refinements import install_grid_results_visual_refinements
 from measurement_run import measurement_data_directory
 from results_charts import CALCULATED_LUX
 from results_grid_charts import GridResultsCharts, extract_grid_data
@@ -35,6 +36,8 @@ def _mean_candela(run):
 
 def attach_grid_results_runtime(window):
     """Attach Heatmap / Plane / 3D views to the existing Results workspace."""
+
+    install_grid_results_visual_refinements()
 
     workspace = getattr(window, "results_workspace_controller", None)
     if workspace is None:
