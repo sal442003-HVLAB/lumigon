@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QLabel, QTableWidgetItem
 
+from measurement_profile_catalog import attach_measurement_profile_catalog
 from miol_icao import MIOL_PROFILES, profile_type_from_text
 
 
@@ -14,6 +15,11 @@ def attach_miol_capture_monitor(window):
         raise RuntimeError("MIOL profile UI is not ready for capture diagnostics.")
     if getattr(window, "measurement_miol_capture_status_label", None) is not None:
         return window.measurement_miol_capture_status_label
+
+    # Finalize the Test Definition catalog after the MIOL runtime has created
+    # its A/B/C profiles and operating-condition selector. This keeps Product,
+    # Profile and Standard scoped to the selected Measurement application.
+    attach_measurement_profile_catalog(window)
 
     label = QLabel("—")
     label.setWordWrap(True)
