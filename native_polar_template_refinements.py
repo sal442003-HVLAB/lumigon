@@ -2,7 +2,7 @@
 
 EULUMDAT/LDT imports retain their separate compatibility presentation. Native
 single-axis measurements and selected planes from native C×Gamma grids share
-one fixed photometric template, regardless of the measured angular span.
+one fixed report-style photometric template, regardless of measured span.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def install_native_polar_template_refinements():
     def draw_single_axis_polar(self, series):
         self.polar_figure.clear()
         self.polar_figure.patch.set_facecolor(BACKGROUND)
-        axis = self.polar_figure.add_subplot(111, projection="polar")
+        axis = self.polar_figure.add_subplot(111)
         axis.set_facecolor(AXIS_BACKGROUND)
         configure_photometric_polar(axis, series.values)
         draw_photometric_curve(axis, series.angles, series.values)
@@ -57,7 +57,7 @@ def install_native_polar_template_refinements():
 
         self.plane_figure.clear()
         self.plane_figure.patch.set_facecolor(BACKGROUND)
-        axis = self.plane_figure.add_subplot(111, projection="polar")
+        axis = self.plane_figure.add_subplot(111)
         axis.set_facecolor(AXIS_BACKGROUND)
         configure_photometric_polar(
             axis,
