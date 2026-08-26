@@ -21,6 +21,7 @@ from test_plan_workspace import attach_test_plan_workspace
 from test_plan_runtime_improvements import install_test_plan_runtime_improvements
 from grid_step_runtime import install_grid_step_runtime, attach_grid_step_runtime
 from grid_validation_ui import attach_grid_validation_ui
+from grid_results_runtime import attach_grid_results_runtime
 from measurement_results_runtime import install_measurement_results_runtime
 from results_workspace import attach_results_workspace
 from results_viewport_fix import attach_results_viewport_fix
@@ -196,6 +197,7 @@ def main():
     organize_main_window_tabs(window)
     attach_results_workspace(window)
     attach_results_viewport_fix(window)
+    attach_grid_results_runtime(window)
     _apply_confirmed_axis_limits(window)
     attach_execution_mode_controls(window)
     attach_measurement_ui_fixes(window)
