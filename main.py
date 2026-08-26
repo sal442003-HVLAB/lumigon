@@ -20,6 +20,7 @@ from measurement_ui_fixes import attach_measurement_ui_fixes
 from test_plan_workspace import attach_test_plan_workspace
 from test_plan_runtime_improvements import install_test_plan_runtime_improvements
 from grid_step_runtime import install_grid_step_runtime, attach_grid_step_runtime
+from grid_validation_ui import attach_grid_validation_ui
 from measurement_results_runtime import install_measurement_results_runtime
 from results_workspace import attach_results_workspace
 from results_viewport_fix import attach_results_viewport_fix
@@ -199,6 +200,7 @@ def main():
     attach_execution_mode_controls(window)
     attach_measurement_ui_fixes(window)
     attach_grid_step_runtime(window)
+    attach_grid_validation_ui(window)
 
     # Pause/Abort are intentionally unconnected until a run starts in the old
     # Measurement implementation. The detached Test Plan workspace takes over
