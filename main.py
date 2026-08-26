@@ -19,6 +19,8 @@ from execution_mode_controls import attach_execution_mode_controls
 from measurement_ui_fixes import attach_measurement_ui_fixes
 from test_plan_workspace import attach_test_plan_workspace
 from test_plan_runtime_improvements import install_test_plan_runtime_improvements
+from measurement_results_runtime import install_measurement_results_runtime
+from results_workspace import attach_results_workspace
 from luxmeter_resilience import install_phamp_connect_retry
 
 from machine_config import (
@@ -173,6 +175,7 @@ def main():
 
     install_phamp_connect_retry()
     install_test_plan_runtime_improvements()
+    install_measurement_results_runtime()
 
     window = MainWindow()
     attach_axis_profile_controls(window)
@@ -187,6 +190,7 @@ def main():
         )
 
     organize_main_window_tabs(window)
+    attach_results_workspace(window)
     _apply_confirmed_axis_limits(window)
     attach_execution_mode_controls(window)
     attach_measurement_ui_fixes(window)
