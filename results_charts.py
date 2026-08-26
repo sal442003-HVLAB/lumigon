@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
 from measurement_run import MeasurementRun
 
@@ -149,33 +149,44 @@ class ResultsCharts(QWidget):
         super().__init__(parent)
         self.run = None
         self.quantity = "Candela"
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(6)
+        root.setSpacing(4)
 
         self.note = QLabel("No plottable single-axis result is loaded.")
-        self.note.setWordWrap(True)
+        self.note.setWordWrap(False)
         self.note.setObjectName("resultsChartNote")
         root.addWidget(self.note)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
+        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.tabs.setMinimumHeight(260)
         root.addWidget(self.tabs, 1)
 
         self.polar_figure = Figure(figsize=(5.6, 4.4), tight_layout=True)
         self.polar_canvas = FigureCanvasQTAgg(self.polar_figure)
+        self.polar_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.polar_canvas.setMinimumHeight(230)
         polar_page = QWidget()
+        polar_page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         polar_layout = QVBoxLayout(polar_page)
         polar_layout.setContentsMargins(0, 0, 0, 0)
-        polar_layout.addWidget(self.polar_canvas)
+        polar_layout.setSpacing(0)
+        polar_layout.addWidget(self.polar_canvas, 1)
 
         self.cartesian_figure = Figure(figsize=(6.4, 4.4), tight_layout=True)
         self.cartesian_canvas = FigureCanvasQTAgg(self.cartesian_figure)
+        self.cartesian_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.cartesian_canvas.setMinimumHeight(230)
         cartesian_page = QWidget()
+        cartesian_page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         cartesian_layout = QVBoxLayout(cartesian_page)
         cartesian_layout.setContentsMargins(0, 0, 0, 0)
-        cartesian_layout.addWidget(self.cartesian_canvas)
+        cartesian_layout.setSpacing(0)
+        cartesian_layout.addWidget(self.cartesian_canvas, 1)
 
         self.tabs.addTab(polar_page, "Polar")
         self.tabs.addTab(cartesian_page, "Cartesian")
@@ -222,7 +233,7 @@ class ResultsCharts(QWidget):
         series = extract_single_axis_series(self.run, self.quantity)
         if series is None:
             self.note.setText(
-                "This run varies both C and Gamma. Grid results will be rendered as Heatmap, selectable planes and 3D distribution in the C × Gamma phase."
+                "This run varies both C and Gamma — Grid charts will be rendered as Heatmap, selectable planes and 3D distribution."
             )
             self._clear_figures("C × Gamma result — grid charts pending")
             return
@@ -254,7 +265,10 @@ class ResultsCharts(QWidget):
         axis.fill(theta, series.values, alpha=0.08)
 
         max_abs = max(10.0, max(abs(value) for value in series.angles))
-        half_span = min(180.0, max(30.0, math.ceil((max_abs + 5.0) / 10.0) * 10.0))
+        half_span = min(
+            180.0,
+            max(30.0, math.ceil((max_abs + 5.0) / 10.0) * 10.0),
+        )
         axis.set_thetamin(-half_span)
         axis.set_thetamax(half_span)
         axis.set_rmin(0.0)
@@ -281,7 +295,13 @@ class ResultsCharts(QWidget):
         axis = self.cartesian_figure.add_subplot(111)
         self._style_axis(axis)
 
-        axis.plot(series.angles, series.values, marker="o", linewidth=2.0, markersize=4.0)
+        axis.plot(
+            series.angles,
+            series.values,
+            marker="o",
+            linewidth=2.0,
+            markersize=4.0,
+        )
         axis.set_xlabel(f"{series.axis_name} angle (°)", color="#CFDDE6")
         axis.set_ylabel(f"{series.quantity_label} ({series.unit})", color="#CFDDE6")
         axis.set_title(
