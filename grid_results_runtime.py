@@ -62,7 +62,7 @@ def attach_grid_results_runtime(window):
 
     grid_charts = GridResultsCharts(workspace)
     grid_charts.setMinimumWidth(0)
-    grid_charts.setMinimumHeight(340)
+    grid_charts.setMinimumHeight(520)
     grid_charts.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
     grid_charts.set_calculation_distance(workspace.calculated_distance_spin.value())
     grid_charts.hide()
