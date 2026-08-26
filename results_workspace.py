@@ -11,6 +11,7 @@ from PySide6.QtCore import QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
     QGroupBox,
@@ -25,7 +26,12 @@ from PySide6.QtWidgets import (
 
 from measurement_run import MeasurementRun, measurement_data_directory
 from measurement_run_io import load_measurement_run_csv
-from results_charts import ResultsCharts, beam_metrics, extract_single_axis_series
+from results_charts import (
+    CALCULATED_LUX,
+    ResultsCharts,
+    beam_metrics,
+    extract_single_axis_series,
+)
 
 
 def _fmt(value, unit="", decimals=3):
@@ -156,6 +162,10 @@ class ResultsWorkspace(QWidget):
         self.peak_angle_label = _make_flexible(QLabel("—"))
         self.mean_candela_label = QLabel("—")
         self.fwhm_label = _make_flexible(QLabel("—"))
+        self.calculated_max_lux_label = _make_flexible(QLabel("—"))
+        self.calculated_max_lux_label.setToolTip(
+            "Derived from maximum Candela using E = I / r² at the selected evaluation distance."
+        )
 
         metrics.addWidget(_caption("Max Lux:"), 0, 0)
         metrics.addWidget(self.max_lux_label, 0, 1)
@@ -169,6 +179,8 @@ class ResultsWorkspace(QWidget):
         metrics.addWidget(self.mean_candela_label, 4, 1)
         metrics.addWidget(_caption("FWHM (50%):"), 5, 0)
         metrics.addWidget(self.fwhm_label, 5, 1)
+        metrics.addWidget(_caption("Calc. max Lux:"), 6, 0)
+        metrics.addWidget(self.calculated_max_lux_label, 6, 1)
         metrics.setColumnStretch(1, 1)
 
         summary_row = QHBoxLayout()
@@ -192,10 +204,31 @@ class ResultsWorkspace(QWidget):
         self.quantity_combo.addItems([
             "Candela",
             "Lux",
+            CALCULATED_LUX,
             "Photocurrent",
         ])
         self.quantity_combo.currentTextChanged.connect(self._quantity_changed)
         analysis_layout.addWidget(self.quantity_combo)
+
+        distance_caption = QLabel("Evaluation distance:")
+        distance_caption.setToolTip(
+            "Distance used only for calculated illuminance. Candela and measured Lux are unchanged."
+        )
+        analysis_layout.addWidget(distance_caption)
+
+        self.calculated_distance_spin = QDoubleSpinBox()
+        self.calculated_distance_spin.setRange(0.1, 10000.0)
+        self.calculated_distance_spin.setDecimals(2)
+        self.calculated_distance_spin.setSingleStep(1.0)
+        self.calculated_distance_spin.setValue(10.0)
+        self.calculated_distance_spin.setSuffix(" m")
+        self.calculated_distance_spin.setToolTip(
+            "Calculated Lux uses E = I / r². The stored measurement data are not modified."
+        )
+        self.calculated_distance_spin.valueChanged.connect(
+            self._calculation_distance_changed
+        )
+        analysis_layout.addWidget(self.calculated_distance_spin)
 
         self.analysis_note = QLabel(
             "Candela is the default photometric quantity. Polar and Cartesian views use the same measured points."
@@ -217,6 +250,7 @@ class ResultsWorkspace(QWidget):
         self.charts.setMinimumWidth(0)
         self.charts.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         self.charts.setMinimumHeight(280)
+        self.charts.set_calculation_distance(self.calculated_distance_spin.value())
         root.addWidget(self.charts, 1)
         root.setStretchFactor(self.charts, 1)
 
@@ -318,6 +352,16 @@ class ResultsWorkspace(QWidget):
             self.fwhm_label.setText(f"{beam.fwhm_deg:.2f}°")
             self.fwhm_label.setToolTip("")
 
+        # Start each loaded/completed run at the actual measurement distance.
+        # At that distance calculated Lux should reproduce measured Lux because
+        # Candela was derived from E × r² during acquisition.
+        if run.distance_m > 0.0:
+            self.calculated_distance_spin.blockSignals(True)
+            self.calculated_distance_spin.setValue(run.distance_m)
+            self.calculated_distance_spin.blockSignals(False)
+
+        self.charts.set_calculation_distance(self.calculated_distance_spin.value())
+        self._update_calculated_lux_summary()
         self.charts.set_run(run)
         self.charts.set_quantity(self.quantity_combo.currentText())
         self._update_analysis_note()
@@ -326,16 +370,46 @@ class ResultsWorkspace(QWidget):
         self.charts.set_quantity(text)
         self._update_analysis_note()
 
+    def _calculation_distance_changed(self, distance_m):
+        self.charts.set_calculation_distance(distance_m)
+        self._update_calculated_lux_summary()
+        self._update_analysis_note()
+
+    def _update_calculated_lux_summary(self):
+        run = self.latest_run
+        if run is None or run.max_candela is None:
+            self.calculated_max_lux_label.setText("—")
+            return
+
+        distance_m = self.calculated_distance_spin.value()
+        if distance_m <= 0.0:
+            self.calculated_max_lux_label.setText("—")
+            return
+
+        calculated_lux = run.max_candela / (distance_m * distance_m)
+        self.calculated_max_lux_label.setText(
+            f"{calculated_lux:.3f} lx @ {distance_m:g} m"
+        )
+
     def _update_analysis_note(self):
         if self.latest_run is None:
             return
+
+        quantity = self.quantity_combo.currentText()
+        distance_m = self.calculated_distance_spin.value()
         series = extract_single_axis_series(
             self.latest_run,
-            self.quantity_combo.currentText(),
+            quantity,
+            distance_m,
         )
         if series is None:
             text = (
                 "C × Gamma data detected — Heatmap, selectable planes and 3D distribution will use this run."
+            )
+        elif quantity == CALCULATED_LUX:
+            text = (
+                f"Calculated Lux at {distance_m:g} m from Candela using E = I / r² • "
+                f"{series.axis_name} sweep • {series.fixed_axis_name} = {series.fixed_angle:+.3f}°."
             )
         else:
             text = (
@@ -380,9 +454,12 @@ class ResultsWorkspace(QWidget):
 
         directory = measurement_data_directory()
         directory.mkdir(parents=True, exist_ok=True)
-        default_name = (
-            f"{self.latest_run.sample_id}_{self.quantity_combo.currentText()}_plot.png"
-        )
+
+        quantity_name = self.quantity_combo.currentText().replace(" ", "_")
+        if self.quantity_combo.currentText() == CALCULATED_LUX:
+            quantity_name += f"_{self.calculated_distance_spin.value():g}m"
+        default_name = f"{self.latest_run.sample_id}_{quantity_name}_plot.png"
+
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Export Result Plot",
