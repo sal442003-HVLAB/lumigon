@@ -16,6 +16,7 @@ from luxmeter_controls import attach_luxmeter_controls
 from tabbed_layout import organize_main_window_tabs
 from execution_mode_controls import attach_execution_mode_controls
 from measurement_ui_fixes import attach_measurement_ui_fixes
+from test_plan_workspace import attach_test_plan_workspace
 from luxmeter_resilience import install_phamp_connect_retry
 
 from machine_config import (
@@ -186,6 +187,7 @@ def main():
     _apply_confirmed_axis_limits(window)
     attach_execution_mode_controls(window)
     attach_measurement_ui_fixes(window)
+    attach_test_plan_workspace(window)
 
     screen = app.primaryScreen()
     if screen is not None:
