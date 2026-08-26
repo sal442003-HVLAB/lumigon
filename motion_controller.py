@@ -14,6 +14,7 @@ from machine_config import (
     P1_36,
     P2_30,
     P5_07,
+    P5_20,
     P5_60,
     P6_02,
     P6_03,
@@ -21,6 +22,8 @@ from machine_config import (
     PR_CONTROL_WORD,
     GAMMA_SPEED_DEFAULT_RPM,
     C_SPEED_DEFAULT_RPM,
+    GAMMA_RAMP_DEFAULT_MS,
+    C_RAMP_DEFAULT_MS,
     GAMMA_SCURVE_DEFAULT_MS,
     C_SCURVE_DEFAULT_MS,
     JOG_STEP_DEG,
@@ -77,6 +80,8 @@ class MotionController:
 
         self.gamma_expected_speed_raw = round(GAMMA_SPEED_DEFAULT_RPM * 10.0)
         self.c_expected_speed_raw = round(C_SPEED_DEFAULT_RPM * 10.0)
+        self.gamma_expected_ramp_ms = GAMMA_RAMP_DEFAULT_MS
+        self.c_expected_ramp_ms = C_RAMP_DEFAULT_MS
         self.gamma_expected_scurve_ms = GAMMA_SCURVE_DEFAULT_MS
         self.c_expected_scurve_ms = C_SCURVE_DEFAULT_MS
 
@@ -84,12 +89,20 @@ class MotionController:
         self.gamma_zero_puu = gamma_zero_puu
         self.c_zero_puu = c_zero_puu
 
-    def set_expected_profile(self, axis: Axis, speed_raw: int, scurve_ms: int):
+    def set_expected_profile(
+        self,
+        axis: Axis,
+        speed_raw: int,
+        ramp_ms: int,
+        scurve_ms: int,
+    ):
         if axis.slave_id == GAMMA_ID:
             self.gamma_expected_speed_raw = speed_raw
+            self.gamma_expected_ramp_ms = ramp_ms
             self.gamma_expected_scurve_ms = scurve_ms
         else:
             self.c_expected_speed_raw = speed_raw
+            self.c_expected_ramp_ms = ramp_ms
             self.c_expected_scurve_ms = scurve_ms
 
     @staticmethod
@@ -123,6 +136,11 @@ class MotionController:
     def get_current_angle(self, axis: Axis) -> float:
         feedback = self.modbus.read_s32(axis.slave_id, P0_09)
         return self.puu_to_degree(axis, feedback - self.get_zero(axis))
+
+    def expected_ramp(self, axis: Axis) -> int:
+        if axis.slave_id == GAMMA_ID:
+            return self.gamma_expected_ramp_ms
+        return self.c_expected_ramp_ms
 
     def expected_scurve(self, axis: Axis) -> int:
         if axis.slave_id == GAMMA_ID:
@@ -176,6 +194,14 @@ class MotionController:
             raise RuntimeError(
                 f"{axis.name}: PR speed is {speed / 10:.1f} rpm, "
                 f"expected {expected_speed / 10:.1f} rpm."
+            )
+
+        ramp = self.modbus.read_u16(axis.slave_id, P5_20)
+        expected_ramp = self.expected_ramp(axis)
+        if ramp != expected_ramp:
+            raise RuntimeError(
+                f"{axis.name}: P5-20 ramp is {ramp} ms, "
+                f"expected {expected_ramp} ms. Motion blocked."
             )
 
         scurve = self.modbus.read_u16(axis.slave_id, P1_36)
