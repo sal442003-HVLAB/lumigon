@@ -1,11 +1,15 @@
 """Runtime refinements for Lumigon Test Plan execution.
 
-Keeps the existing Measurement engines intact while adding operator-facing run
-controls, nearest-endpoint sweep selection, fixed-axis auto-positioning, a
-single countdown ETA, and automatic return to Session Home (0°, 0°) after a
-normally completed test.
+This layer keeps the existing Measurement UI and signals intact while adding:
+- explicit pre-positioning to the nearest scan endpoint before point 1 starts,
+- fixed-axis auto-positioning,
+- a profile-aware initial ETA that includes motion + acquisition + Home return,
+- a true countdown ETA (not recalculated from completed points),
+- robust automatic return of both axes to Session Home after a normal run,
+- dedicated Pause / Stop controls in the live Test Plan workspace.
 """
 
+import math
 import time
 
 from PySide6.QtCore import QThread, Signal
@@ -16,18 +20,36 @@ from measurement_execution import MeasurementRunWorker
 from motion_controller import C_AXIS, GAMMA
 from test_plan_workspace import (
     CommissioningMotionWorker,
+    SCAN_GRID,
     SCAN_SINGLE_C_GAMMA,
     SCAN_SINGLE_GAMMA_C,
     TestPlanWorkspace,
     FIXED_AXIS_TOLERANCE_DEG,
     INTER_SAMPLE_DELAY_MS,
-    MEASUREMENT_OVERHEAD_MS,
     _format_duration,
 )
 
 
+# Timing model constants.  The important part is that every actual PR move is
+# estimated from current speed plus Ramp and S-curve rather than cruise speed
+# alone.  The small communication allowance covers Modbus command/readback and
+# target polling; the final margin avoids ETA reaching zero before the hardware.
+MOTION_COMMAND_OVERHEAD_S = 0.15
+MEASUREMENT_QUERY_OVERHEAD_S = 0.025
+FORMAL_MEASUREMENT_SETUP_S = 0.25
+ETA_MARGIN_FACTOR = 1.10
+ENDPOINT_TIE_TOLERANCE_DEG = 0.05
+HOME_TOLERANCE_DEG = 0.03
+
+
 class ReturnHomeWorker(QThread):
-    """Return both axes to Session Home without blocking the HMI thread."""
+    """Return both axes to Session Home without blocking the HMI thread.
+
+    Each axis is handled independently.  This is important during commissioning:
+    if one axis is already at 0° while its Servo is OFF, that must not prevent the
+    other axis from returning Home.  Likewise, a failure on one axis does not
+    suppress the return attempt on the other axis.
+    """
 
     progress = Signal(str)
     home_completed = Signal()
@@ -37,17 +59,53 @@ class ReturnHomeWorker(QThread):
         super().__init__(parent)
         self.motion = motion
 
-    def run(self):
+    def _return_axis(self, axis):
+        actual = self.motion.get_current_angle(axis)
+        if abs(actual) <= HOME_TOLERANCE_DEG:
+            self.progress.emit(
+                f"{axis.name} already at Home ({actual:+.3f}°)."
+            )
+            return None
+
+        self.progress.emit(
+            f"Returning {axis.name} axis to Home: {actual:+.3f}° → 0.000°…"
+        )
         try:
-            # Return C first and Gamma last so the final commanded orientation is
-            # Gamma = 0° after any mechanical coupling during the C return.
-            self.progress.emit("Test complete — returning C axis to Home (0.000°)…")
-            self.motion.return_to_zero(C_AXIS)
-            self.progress.emit("Returning Gamma axis to Home (0.000°)…")
-            self.motion.return_to_zero(GAMMA)
+            self.motion.return_to_zero(axis)
+        except Exception as exc:
+            return f"{axis.name}: {exc}"
+
+        final = self.motion.get_current_angle(axis)
+        if abs(final) > HOME_TOLERANCE_DEG:
+            return (
+                f"{axis.name}: Home verification failed; final position "
+                f"{final:+.3f}°."
+            )
+
+        self.progress.emit(f"{axis.name} Home verified at {final:+.3f}°.")
+        return None
+
+    def run(self):
+        errors = []
+        try:
+            # C first, Gamma last.  This preserves the previous commissioning
+            # choice that Gamma is the final commanded orientation.
+            for axis in (C_AXIS, GAMMA):
+                error = self._return_axis(axis)
+                if error:
+                    errors.append(error)
 
             c_actual = self.motion.get_current_angle(C_AXIS)
             gamma_actual = self.motion.get_current_angle(GAMMA)
+
+            if errors:
+                self.failed.emit(
+                    "\n".join(errors)
+                    + f"\nFinal feedback: C {c_actual:+.3f}°, "
+                    f"Gamma {gamma_actual:+.3f}°."
+                )
+                return
+
             self.progress.emit(
                 f"Home reached: C {c_actual:+.3f}°  •  Gamma {gamma_actual:+.3f}°"
             )
@@ -81,27 +139,299 @@ def _auto_position_fixed_axis(self, axis, target):
 
 
 def _axis_motion_seconds(motion, axis, delta_deg):
+    """Estimate one PR move using speed + Ramp + S-curve.
+
+    For short moves the axis cannot spend the whole move at configured cruise
+    speed.  Treat Ramp + S-curve as an effective acceleration/deceleration time
+    and use a triangular/trapezoidal approximation.  This is intentionally more
+    realistic for 1° Step Scan moves than distance / cruise-speed alone.
+    """
+
+    distance = abs(float(delta_deg))
+    if distance <= 0.01:
+        return 0.0
+
     motor_rpm = motion.expected_speed_raw(axis) / 10.0
     if motor_rpm <= 0.0:
         return 0.0
+
     output_deg_per_second = motor_rpm * 6.0 / axis.gear_ratio
     if output_deg_per_second <= 0.0:
         return 0.0
-    return abs(float(delta_deg)) / output_deg_per_second
+
+    ramp_s = max(0.0, motion.expected_ramp(axis) / 1000.0)
+    scurve_s = max(0.0, motion.expected_scurve(axis) / 1000.0)
+    accel_time_s = ramp_s + scurve_s
+
+    if accel_time_s <= 1e-6:
+        travel_s = distance / output_deg_per_second
+    else:
+        # Distance needed for a full accel + full decel at configured speed.
+        full_profile_distance = output_deg_per_second * accel_time_s
+        if distance >= full_profile_distance:
+            cruise_distance = distance - full_profile_distance
+            travel_s = (
+                2.0 * accel_time_s
+                + cruise_distance / output_deg_per_second
+            )
+        else:
+            # Short move: triangular profile, peak speed below configured speed.
+            travel_s = 2.0 * math.sqrt(
+                distance * accel_time_s / output_deg_per_second
+            )
+
+    return travel_s + MOTION_COMMAND_OVERHEAD_S
+
+
+def _measurement_run_prepositioned(self):
+    """MeasurementRunWorker.run with an explicit pre-positioning phase."""
+
+    try:
+        if not self.points:
+            raise RuntimeError("No Ready measurement points were supplied.")
+        if self.distance_m <= 0.0:
+            raise RuntimeError("Measurement distance must be greater than zero.")
+        if self.scan_mode == SCAN_GRID:
+            raise RuntimeError("C × Gamma Grid automatic execution is not enabled yet.")
+
+        if self.apply_measurement_settings:
+            if self.meter.integration_time_ms != self.integration_ms:
+                self.progress.emit(
+                    f"Applying luxmeter integration: {self.integration_ms} ms"
+                )
+                self.meter.set_integration_time(self.integration_ms)
+
+        self.meter.set_software_trigger()
+        total = len(self.points)
+
+        # Position both axes first.  No point is declared Started and no Lux is
+        # acquired until the sweep axis has actually reached the chosen endpoint.
+        _, first_c, first_gamma = self.points[0]
+        fixed_axis, fixed_target, sweep_axis, sweep_start = self._axes_for_mode(
+            first_c,
+            first_gamma,
+        )
+        self.progress.emit("Preparing scan start position…")
+        self._verify_fixed_axis(fixed_axis, fixed_target)
+
+        if self.isInterruptionRequested():
+            self.aborted.emit("Measurement aborted before scan-start positioning.")
+            return
+
+        current = self.motion.get_current_angle(sweep_axis)
+        if abs(current - sweep_start) > 0.01:
+            self.progress.emit(
+                f"Positioning {sweep_axis.name} at scan start: "
+                f"{current:+.3f}° → {sweep_start:+.3f}°"
+            )
+            self.motion.move_absolute(sweep_axis, sweep_start)
+
+        if self.isInterruptionRequested():
+            self.aborted.emit(
+                "Abort requested. Scan-start positioning completed safely; "
+                "no acquisition was started."
+            )
+            return
+
+        for sequence, (row, c_target, gamma_target) in enumerate(
+            self.points,
+            start=1,
+        ):
+            if self.isInterruptionRequested():
+                self.aborted.emit("Measurement run aborted before the next point.")
+                return
+            if not self._wait_while_paused():
+                self.aborted.emit("Measurement run aborted while paused.")
+                return
+
+            fixed_axis, fixed_target, sweep_axis, sweep_target = self._axes_for_mode(
+                c_target,
+                gamma_target,
+            )
+            self._verify_fixed_axis(fixed_axis, fixed_target)
+
+            # Point 1 is emitted only after scan-start positioning is complete.
+            self.point_started.emit(
+                row,
+                sequence,
+                total,
+                c_target,
+                gamma_target,
+            )
+
+            if sequence > 1:
+                self.progress.emit(
+                    f"Point {sequence}/{total}: moving {sweep_axis.name} "
+                    f"to {sweep_target:+.3f}°"
+                )
+                self.motion.move_absolute(sweep_axis, sweep_target)
+            else:
+                self.progress.emit(
+                    f"Point 1/{total}: scan start reached at "
+                    f"{sweep_target:+.3f}°"
+                )
+
+            if self.isInterruptionRequested():
+                self.aborted.emit(
+                    "Abort requested. The active servo move completed safely; "
+                    "no further acquisition was started."
+                )
+                return
+
+            if not self._wait_while_paused():
+                self.aborted.emit("Measurement run aborted after motion.")
+                return
+
+            self.progress.emit(
+                f"Point {sequence}/{total}: settling for {self.settle_time_s:.1f} s"
+            )
+            if not self._wait_interruptible(self.settle_time_s):
+                self.aborted.emit("Measurement run aborted during settling.")
+                return
+
+            self.progress.emit(
+                f"Point {sequence}/{total}: acquiring {self.samples} Lux samples"
+            )
+            reading = self.meter.read_lux(samples=self.samples)
+
+            if self.isInterruptionRequested():
+                self.aborted.emit(
+                    "Abort requested during acquisition; the completed reading "
+                    "was discarded and no further point will run."
+                )
+                return
+
+            candela = reading.lux * (self.distance_m ** 2)
+            current_na = reading.mean_current_a * 1e9
+            self.point_result.emit(
+                row,
+                current_na,
+                reading.lux,
+                reading.stdev_lux,
+                candela,
+            )
+
+        self.run_completed.emit()
+
+    except Exception as exc:
+        self.failed.emit(str(exc))
+
+
+def _commissioning_run_prepositioned(self):
+    """Motion-only Step Scan with the same explicit scan-start positioning."""
+
+    try:
+        if not self.points:
+            raise RuntimeError("No Ready points were supplied.")
+
+        total = len(self.points)
+        _, first_c, first_gamma = self.points[0]
+        fixed_axis, fixed_target, sweep_axis, sweep_start = self._axes_for_mode(
+            first_c,
+            first_gamma,
+        )
+
+        self.progress.emit("Preparing scan start position…")
+        self._verify_fixed_axis(fixed_axis, fixed_target)
+        if self.isInterruptionRequested():
+            self.aborted.emit("Motion-only run aborted before scan-start positioning.")
+            return
+
+        current = self.motion.get_current_angle(sweep_axis)
+        if abs(current - sweep_start) > 0.01:
+            self.progress.emit(
+                f"Positioning {sweep_axis.name} at scan start: "
+                f"{current:+.3f}° → {sweep_start:+.3f}°"
+            )
+            self.motion.move_absolute(sweep_axis, sweep_start)
+
+        if self.isInterruptionRequested():
+            self.aborted.emit(
+                "Abort requested. Scan-start positioning completed safely."
+            )
+            return
+
+        for sequence, (row, c_target, gamma_target) in enumerate(
+            self.points,
+            start=1,
+        ):
+            if self.isInterruptionRequested():
+                self.aborted.emit("Motion-only run aborted before the next point.")
+                return
+            if not self._wait_while_paused():
+                self.aborted.emit("Motion-only run aborted while paused.")
+                return
+
+            fixed_axis, fixed_target, sweep_axis, sweep_target = self._axes_for_mode(
+                c_target,
+                gamma_target,
+            )
+            self._verify_fixed_axis(fixed_axis, fixed_target)
+
+            self.point_started.emit(
+                row,
+                sequence,
+                total,
+                c_target,
+                gamma_target,
+            )
+
+            if sequence > 1:
+                self.progress.emit(
+                    f"Point {sequence}/{total}: moving {sweep_axis.name} "
+                    f"to {sweep_target:+.3f}°"
+                )
+                self.motion.move_absolute(sweep_axis, sweep_target)
+            else:
+                self.progress.emit(
+                    f"Point 1/{total}: scan start reached at "
+                    f"{sweep_target:+.3f}°"
+                )
+
+            if self.isInterruptionRequested():
+                self.aborted.emit(
+                    "Abort requested. The active servo move completed safely."
+                )
+                return
+
+            if self.settle_time_s > 0.0:
+                self.progress.emit(
+                    f"Point {sequence}/{total}: settling for "
+                    f"{self.settle_time_s:.1f} s"
+                )
+                if not self._wait_interruptible(self.settle_time_s):
+                    self.aborted.emit("Motion-only run aborted during settling.")
+                    return
+
+            self.point_done.emit(
+                row,
+                sequence,
+                total,
+                c_target,
+                gamma_target,
+            )
+
+        self.run_completed.emit()
+    except Exception as exc:
+        self.failed.emit(str(exc))
 
 
 def install_test_plan_runtime_improvements():
-    """Install the v0.3 Test Plan run refinements before the workspace is built."""
+    """Install the v0.3 Test Plan refinements before the workspace is built."""
 
     if getattr(TestPlanWorkspace, "_runtime_improvements_installed", False):
         return
     TestPlanWorkspace._runtime_improvements_installed = True
 
-    # The fixed axis should not be an operator prerequisite. If it is not already
-    # at the requested fixed angle, position it automatically before acquisition.
+    # Fixed-axis positioning is automatic; the operator does not have to place
+    # it manually before Start Measurement.
     MeasurementRunWorker._verify_fixed_axis = _auto_position_fixed_axis
     ContinuousMeasurementWorker._verify_fixed_axis = _auto_position_fixed_axis
     CommissioningMotionWorker._verify_fixed_axis = _auto_position_fixed_axis
+
+    # Step Scan explicitly reaches the selected endpoint before point 1 begins.
+    MeasurementRunWorker.run = _measurement_run_prepositioned
+    CommissioningMotionWorker.run = _commissioning_run_prepositioned
 
     original_init = TestPlanWorkspace.__init__
     original_ready_points = TestPlanWorkspace._ready_points
@@ -112,9 +442,6 @@ def install_test_plan_runtime_improvements():
     def patched_init(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
 
-        # Dedicated run controls live inside the Live Measurement Run panel. The
-        # legacy Execution-box Pause/Abort controls remain hidden, so the operator
-        # always sees Pause + Stop in the same place as live progress.
         controls = QHBoxLayout()
         controls.addStretch(1)
         self.run_pause_button = QPushButton("Pause")
@@ -169,10 +496,12 @@ def install_test_plan_runtime_improvements():
 
         first_target = points[0][value_index]
         last_target = points[-1][value_index]
+        first_distance = abs(current - first_target)
+        last_distance = abs(current - last_target)
 
-        # Preserve the defined direction on an exact tie; otherwise approach the
-        # physically closest endpoint and scan from there.
-        if abs(current - last_target) + 1e-9 < abs(current - first_target):
+        # Do not let tiny encoder noise around an exact midpoint flip direction.
+        # Outside the tie band, always start from the physically nearer endpoint.
+        if last_distance + ENDPOINT_TIE_TOLERANCE_DEG < first_distance:
             return list(reversed(points))
         return points
 
@@ -197,8 +526,8 @@ def install_test_plan_runtime_improvements():
         delta = max(0.0, now - last_tick)
         self._eta_last_tick = now
 
-        # One estimate is calculated at run start. From then on ETA is a simple
-        # countdown; point completion times do not cause the value to jump.
+        # Calculate once, then only count down.  Point completion cannot make ETA
+        # jump.  Pause freezes remaining time but elapsed remains wall-clock time.
         if not self.paused:
             self._eta_remaining_s = max(0.0, self._eta_remaining_s - delta)
 
@@ -208,8 +537,6 @@ def install_test_plan_runtime_improvements():
     def patched_set_running_controls(self, running):
         original_set_running_controls(self, running)
 
-        # Keep the old Execution-box controls hidden. The dedicated controls in
-        # the Live Measurement Run panel are the only operator run controls.
         if self.pause_button is not None:
             self.pause_button.hide()
         if self.abort_button is not None:
@@ -244,8 +571,6 @@ def install_test_plan_runtime_improvements():
             self.run_pause_button.setEnabled(False)
         if hasattr(self, "run_stop_button"):
             self.run_stop_button.setEnabled(False)
-
-        # Keep legacy controls disabled too, even though they are hidden.
         if self.pause_button is not None:
             self.pause_button.setEnabled(False)
         if self.abort_button is not None:
@@ -256,7 +581,7 @@ def install_test_plan_runtime_improvements():
             "the run will stop at the next safe checkpoint."
         )
 
-    def _motion_plan(self, points):
+    def _step_motion_plan(self, points):
         if not points:
             return 0.0
 
@@ -292,43 +617,96 @@ def install_test_plan_runtime_improvements():
         for previous, current in zip(targets, targets[1:]):
             seconds += _axis_motion_seconds(motion, sweep_axis, current - previous)
 
-        # Include the automatic post-test return to Session Home.
-        seconds += _axis_motion_seconds(motion, sweep_axis, -targets[-1])
-        seconds += _axis_motion_seconds(motion, fixed_axis, -fixed_target)
+        # Normal completion includes automatic Home return.
+        seconds += _axis_motion_seconds(motion, C_AXIS, -points[-1][1])
+        seconds += _axis_motion_seconds(motion, GAMMA, -points[-1][2])
+        return seconds
+
+    def _continuous_motion_plan(self, points):
+        if not points:
+            return 0.0
+
+        motion = self.host_window.motion
+        mode = self.host_window.measurement_scan_mode_combo.currentIndex()
+        if mode == SCAN_SINGLE_C_GAMMA:
+            fixed_axis = C_AXIS
+            fixed_target = points[0][1]
+            sweep_axis = GAMMA
+            start_target = points[0][2]
+            end_target = points[-1][2]
+            final_c = fixed_target
+            final_gamma = end_target
+        else:
+            fixed_axis = GAMMA
+            fixed_target = points[0][2]
+            sweep_axis = C_AXIS
+            start_target = points[0][1]
+            end_target = points[-1][1]
+            final_c = end_target
+            final_gamma = fixed_target
+
+        try:
+            current_fixed = motion.get_current_angle(fixed_axis)
+            current_sweep = motion.get_current_angle(sweep_axis)
+        except Exception:
+            return 0.0
+
+        seconds = _axis_motion_seconds(
+            motion,
+            fixed_axis,
+            fixed_target - current_fixed,
+        )
+        seconds += _axis_motion_seconds(
+            motion,
+            sweep_axis,
+            start_target - current_sweep,
+        )
+        # One physical Fly Scan move, not one move per target point.
+        seconds += _axis_motion_seconds(
+            motion,
+            sweep_axis,
+            end_target - start_target,
+        )
+        seconds += _axis_motion_seconds(motion, C_AXIS, -final_c)
+        seconds += _axis_motion_seconds(motion, GAMMA, -final_gamma)
         return seconds
 
     def patched_step_estimate_seconds(self, point_count, motion_only=False):
         points = self._ready_points()
         settle = self.host_window.measurement_settle_spin.value()
-        total = point_count * settle
+        total = _step_motion_plan(self, points)
+        total += point_count * settle
 
         if not motion_only:
             samples = self.host_window.measurement_samples_spin.value()
-            integration = self.host_window.measurement_integration_spin.value()
-            measurement_s = (integration + MEASUREMENT_OVERHEAD_MS) / 1000.0
-            sample_block_s = samples * measurement_s
+            integration_s = (
+                self.host_window.measurement_integration_spin.value() / 1000.0
+            )
+            per_sample_s = integration_s + MEASUREMENT_QUERY_OVERHEAD_S
+            sample_block_s = samples * per_sample_s
             if samples > 1:
-                sample_block_s += (samples - 1) * (INTER_SAMPLE_DELAY_MS / 1000.0)
+                sample_block_s += (
+                    samples - 1
+                ) * (INTER_SAMPLE_DELAY_MS / 1000.0)
             total += point_count * sample_block_s
+            total += FORMAL_MEASUREMENT_SETUP_S
 
-        total += _motion_plan(self, points)
-        return total
+        return total * ETA_MARGIN_FACTOR
 
     def patched_continuous_estimate_seconds(self, points):
         if not points:
             return 0.0
 
-        # _motion_plan includes endpoint approach, sweep travel and Home return.
-        total = _motion_plan(self, points)
+        total = _continuous_motion_plan(self, points)
         total += max(
-            0.2,
+            0.25,
             self.host_window.measurement_integration_spin.value() / 1000.0,
         )
-        return total
+        return total * ETA_MARGIN_FACTOR
 
     def patched_restore_after_worker(self):
-        # A normally completed test is not considered finished until both axes
-        # are back at Session Home. Do this in a worker so the HMI stays responsive.
+        # A normal run is not operationally finished until Home return has been
+        # attempted for both axes.
         if self.run_finished_normally and not self._home_return_in_progress:
             finished_worker = self.active_worker
             if finished_worker is not None:
@@ -339,12 +717,18 @@ def install_test_plan_runtime_improvements():
 
             self._home_return_in_progress = True
             self.run_status_label.setText(
-                "Test complete — returning both axes to Home (C 0.000°, Gamma 0.000°)…"
+                "Measurements complete — returning both axes to Home "
+                "(C 0.000°, Gamma 0.000°)…"
             )
             if hasattr(self, "run_pause_button"):
                 self.run_pause_button.hide()
             if hasattr(self, "run_stop_button"):
                 self.run_stop_button.hide()
+
+            # _finish_run_monitor() stops the clock when the last point completes.
+            # Home time is part of the initial ETA, so resume the same countdown.
+            self._eta_last_tick = time.monotonic()
+            self.run_clock.start()
 
             home_worker = ReturnHomeWorker(self.host_window.motion, parent=self)
             self.active_worker = home_worker
@@ -353,20 +737,25 @@ def install_test_plan_runtime_improvements():
                 self.run_status_label.setText(text)
 
             def on_home_completed():
+                self._eta_remaining_s = 0.0
+                self.run_eta_label.setText("0 s")
+                self.run_clock.stop()
                 self.run_status_label.setText(
                     "Test complete — C and Gamma returned to Home (0.000°)."
                 )
 
             def on_home_failed(message):
                 self._home_return_failed = message
+                self.run_clock.stop()
+                self.run_eta_label.setText("—")
                 self.run_status_label.setText(
-                    "Test measurements completed, but automatic Home return failed."
+                    "Measurements completed, but automatic Home return was incomplete."
                 )
                 QMessageBox.warning(
                     self,
                     "Return Home",
-                    "The test completed, but Lumigon could not return both axes to Home:\n\n"
-                    + message,
+                    "The test completed, but Lumigon could not return every axis "
+                    "to Home:\n\n" + message,
                 )
 
             home_worker.progress.connect(on_home_progress)
