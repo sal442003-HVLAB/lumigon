@@ -1,9 +1,11 @@
-"""Live diagnostics for the most recent flashing-MIOL temporal capture."""
+"""Live diagnostics and labels for ICAO MIOL temporal acquisition."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QLabel, QTableWidgetItem
+
+from miol_icao import MIOL_PROFILES, profile_type_from_text
 
 
 def attach_miol_capture_monitor(window):
@@ -23,19 +25,48 @@ def attach_miol_capture_monitor(window):
     )
     box.layout().addRow("Last I-effective capture:", label)
 
+    def sync_table_labels(*_args):
+        profile_combo = getattr(window, "measurement_profile_combo", None)
+        table = getattr(window, "measurement_plan_table", None)
+        if profile_combo is None or table is None:
+            return
+        code = profile_type_from_text(profile_combo.currentText())
+        flashing = bool(code and MIOL_PROFILES[code].flashing)
+        # Change only the two photometric result columns so the plan clearly
+        # states the ICAO quantity being stored.
+        if flashing:
+            table.setHorizontalHeaderItem(5, QTableWidgetItem("E-effective (lx)"))
+            table.setHorizontalHeaderItem(6, QTableWidgetItem("I-effective (cd)"))
+        else:
+            table.setHorizontalHeaderItem(5, QTableWidgetItem("Lux"))
+            table.setHorizontalHeaderItem(6, QTableWidgetItem("Candela"))
+
+    profile_combo = getattr(window, "measurement_profile_combo", None)
+    if profile_combo is not None:
+        profile_combo.currentIndexChanged.connect(sync_table_labels)
+    sync_table_labels()
+
     timer = QTimer(window)
     timer.setInterval(400)
 
     def refresh():
         meter = getattr(window, "luxmeter", None)
-        data = getattr(meter, "last_miol_capture", None) if meter is not None else None
+        data = (
+            getattr(meter, "last_miol_capture", None)
+            if meter is not None
+            else None
+        )
         if not data:
             label.setText("—")
             return
 
         interval_ms = 1000.0 * float(data.get("effective_interval_s", 0.0))
         median_ms = data.get("median_sample_interval_ms")
-        median_text = "—" if median_ms is None else f"{float(median_ms):.1f} ms"
+        median_text = (
+            "—"
+            if median_ms is None
+            else f"{float(median_ms):.1f} ms"
+        )
         label.setText(
             f"Ie {float(data.get('effective_lux', 0.0)):.3f} lx  •  "
             f"peak {float(data.get('peak_lux_net', 0.0)):.3f} lx  •  "
