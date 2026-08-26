@@ -43,10 +43,10 @@ SPEED_MIN_RPM = 0.5
 SPEED_MAX_RPM = 15.0
 SPEED_STEP_RPM = 0.5
 
-# Gamma baseline / previous commissioning values.
+# Gamma baseline selected for normal commissioning use.
 GAMMA_SPEED_DEFAULT_RPM = 5.0
-GAMMA_RAMP_DEFAULT_MS = 200
-GAMMA_SCURVE_DEFAULT_MS = 200
+GAMMA_RAMP_DEFAULT_MS = 300
+GAMMA_SCURVE_DEFAULT_MS = 2000
 
 # C baseline selected during commissioning on 2026-08-23.
 C_SPEED_DEFAULT_RPM = 5.0
