@@ -18,6 +18,7 @@ from tabbed_layout import organize_main_window_tabs
 from execution_mode_controls import attach_execution_mode_controls
 from measurement_ui_fixes import attach_measurement_ui_fixes
 from test_plan_workspace import attach_test_plan_workspace
+from test_plan_runtime_improvements import install_test_plan_runtime_improvements
 from luxmeter_resilience import install_phamp_connect_retry
 
 from machine_config import (
@@ -171,6 +172,7 @@ def main():
     )
 
     install_phamp_connect_retry()
+    install_test_plan_runtime_improvements()
 
     window = MainWindow()
     attach_axis_profile_controls(window)
