@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox, QSizePolicy
 
 from grid_results_visual_refinements import install_grid_results_visual_refinements
 from eulumdat_results_refinements import install_eulumdat_results_refinements
+from eulumdat_dual_plane_refinements import install_eulumdat_dual_plane_refinements
 from measurement_run import measurement_data_directory
 from results_charts import CALCULATED_LUX
 from results_grid_charts import GridResultsCharts, extract_grid_data
@@ -40,6 +41,7 @@ def attach_grid_results_runtime(window):
 
     install_grid_results_visual_refinements()
     install_eulumdat_results_refinements()
+    install_eulumdat_dual_plane_refinements()
 
     workspace = getattr(window, "results_workspace_controller", None)
     if workspace is None:
