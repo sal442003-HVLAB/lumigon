@@ -7,8 +7,6 @@ run summary and keeps the quantity selector ready for the next plotting phase
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from PySide6.QtCore import QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -221,4 +219,33 @@ class ResultsWorkspace(QWidget):
 def build_results_workspace(window):
     workspace = ResultsWorkspace(window)
     window.results_workspace_controller = workspace
+    return workspace
+
+
+def attach_results_workspace(window):
+    """Replace the existing Results placeholder without rebuilding the tab strip."""
+
+    tab = getattr(window, "results_tab", None)
+    if tab is None:
+        raise RuntimeError("Results tab is not available.")
+
+    layout = tab.layout()
+    if layout is None:
+        layout = QVBoxLayout(tab)
+
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        child_layout = item.layout()
+        if widget is not None:
+            widget.deleteLater()
+        elif child_layout is not None:
+            child_layout.deleteLater()
+
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    workspace = build_results_workspace(window)
+    layout.addWidget(workspace)
+    window.measurement_runs = []
+    window.latest_measurement_run = None
     return workspace
