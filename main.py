@@ -1,4 +1,5 @@
 import sys
+import warnings
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
@@ -187,7 +188,20 @@ def main():
     _apply_confirmed_axis_limits(window)
     attach_execution_mode_controls(window)
     attach_measurement_ui_fixes(window)
-    attach_test_plan_workspace(window)
+
+    # Pause/Abort are intentionally unconnected until a run starts in the old
+    # Measurement implementation. The detached Test Plan workspace takes over
+    # those buttons at startup, and PySide emits a RuntimeWarning when its
+    # defensive disconnect() finds no previous slot. This warning is harmless;
+    # suppress only that specific libpyside message while the workspace is
+    # attached so real RuntimeWarnings remain visible.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r'libpyside: Failed to disconnect \(None\) from signal "clicked\(\)"\.',
+            category=RuntimeWarning,
+        )
+        attach_test_plan_workspace(window)
 
     screen = app.primaryScreen()
     if screen is not None:
