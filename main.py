@@ -17,6 +17,7 @@ from luxmeter_controls import attach_luxmeter_controls
 from tabbed_layout import organize_main_window_tabs
 from execution_mode_controls import attach_execution_mode_controls
 from measurement_ui_fixes import attach_measurement_ui_fixes
+from measurement_scroll_runtime import attach_measurement_scroll_runtime
 from test_plan_workspace import attach_test_plan_workspace
 from test_plan_runtime_improvements import install_test_plan_runtime_improvements
 from grid_step_runtime import install_grid_step_runtime, attach_grid_step_runtime
@@ -209,6 +210,7 @@ def main():
     attach_miol_capture_monitor(window)
     attach_grid_step_runtime(window)
     attach_grid_validation_ui(window)
+    attach_measurement_scroll_runtime(window)
 
     # Pause/Abort are intentionally unconnected until a run starts in the old
     # Measurement implementation. The detached Test Plan workspace takes over
@@ -237,7 +239,3 @@ def main():
     sys.exit(
         app.exec()
     )
-
-
-if __name__ == "__main__":
-    main()
