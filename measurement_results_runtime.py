@@ -81,11 +81,30 @@ def install_measurement_results_runtime():
         box.addButton(QMessageBox.Close)
         box.exec()
 
-        if box.clickedButton() is view_button:
-            tabs = getattr(self.host_window, "main_tabs", None)
-            results_tab = getattr(self.host_window, "results_tab", None)
-            if tabs is not None and results_tab is not None:
-                tabs.setCurrentWidget(results_tab)
+        if box.clickedButton() is not view_button:
+            return
+
+        # The Test Plan workspace is a separate maximized top-level window. Merely
+        # changing the tab on the host window therefore changed Results behind it.
+        # Hide the finished workflow first, then foreground the main Lumigon window
+        # on Results so View Results behaves exactly as the operator expects.
+        tabs = getattr(self.host_window, "main_tabs", None)
+        results_tab = getattr(self.host_window, "results_tab", None)
+        if tabs is not None and results_tab is not None:
+            tabs.setCurrentWidget(results_tab)
+
+        self.hide()
+        self.host_window.showMaximized()
+        self.host_window.raise_()
+        self.host_window.activateWindow()
+
+        results_workspace = getattr(
+            self.host_window,
+            "results_workspace_controller",
+            None,
+        )
+        if results_workspace is not None:
+            results_workspace.set_run(run)
 
     def _archive_completed_run(self):
         if getattr(self, "_archive_done", False):
