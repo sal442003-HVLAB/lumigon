@@ -62,13 +62,16 @@ def attach_results_viewport_fix(window):
     charts = getattr(workspace, "charts", None)
     if charts is not None:
         charts.setMinimumWidth(0)
-        charts.setMinimumHeight(320)
+        # Give the photometric plot enough real vertical space to fill the
+        # Results page. The surrounding QScrollArea safely absorbs this height
+        # without changing the main-window geometry.
+        charts.setMinimumHeight(520)
         charts.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
         stack = getattr(charts, "stack", None)
         if stack is not None:
             stack.setMinimumWidth(0)
-            stack.setMinimumHeight(280)
+            stack.setMinimumHeight(480)
             stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
         # FigureCanvasQTAgg's DPI-based sizeHint is useful in a standalone
