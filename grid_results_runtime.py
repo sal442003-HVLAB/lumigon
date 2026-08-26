@@ -18,6 +18,7 @@ from eulumdat_polar_orientation import install_eulumdat_polar_orientation
 from eulumdat_folded_standard_plane_refinements import (
     install_eulumdat_folded_standard_plane_refinements,
 )
+from native_polar_template_refinements import install_native_polar_template_refinements
 from measurement_run import measurement_data_directory
 from results_charts import CALCULATED_LUX
 from results_grid_charts import GridResultsCharts, extract_grid_data
@@ -48,6 +49,10 @@ def attach_grid_results_runtime(window):
     install_eulumdat_dual_plane_refinements()
     install_eulumdat_polar_orientation()
     install_eulumdat_folded_standard_plane_refinements()
+    # Install native Lumigon presentation last. Its Grid wrapper delegates all
+    # imported EULUMDAT runs back through the compatibility chain above, while
+    # native single-axis and selected-grid planes use the shared Lumigon template.
+    install_native_polar_template_refinements()
 
     workspace = getattr(window, "results_workspace_controller", None)
     if workspace is None:
