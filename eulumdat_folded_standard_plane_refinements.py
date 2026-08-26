@@ -16,6 +16,7 @@ from eulumdat_dual_plane_refinements import (
     DUAL_STANDARD_DATA,
 )
 from eulumdat_results_refinements import _is_eulumdat_run, _nearest_index
+from native_polar_template_refinements import install_native_polar_template_refinements
 from results_grid_charts import GridResultsCharts
 
 
@@ -176,3 +177,9 @@ def install_eulumdat_folded_standard_plane_refinements():
         self.plane_canvas.draw()
 
     GridResultsCharts._draw_plane = patched_draw_plane
+
+    # Install the common Lumigon template after the EULUMDAT wrappers. The
+    # native patch explicitly delegates imported LDT/EULUMDAT runs back to this
+    # EULUMDAT path, while all native Lumigon Polar views use the shared fixed
+    # template.
+    install_native_polar_template_refinements()
