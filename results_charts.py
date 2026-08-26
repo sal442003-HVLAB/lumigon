@@ -7,7 +7,17 @@ from dataclasses import dataclass
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PySide6.QtWidgets import QLabel, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import (
+    QButtonGroup,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from measurement_run import MeasurementRun
 
@@ -143,33 +153,62 @@ def beam_metrics(series: SingleAxisSeries | None) -> BeamMetrics:
 
 
 class ResultsCharts(QWidget):
-    """Polar and Cartesian charts driven by the active MeasurementRun."""
+    """Polar and Cartesian charts driven by the active MeasurementRun.
+
+    A QStackedWidget is used instead of a nested QTabWidget.  On some Windows /
+    PySide6 layouts the nested tab pane kept a valid Matplotlib canvas but gave
+    its page an unusable viewport height.  The explicit stack is simpler and
+    reliably gives the active FigureCanvas all remaining Results space.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.run = None
         self.quantity = "Candela"
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumHeight(210)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(4)
 
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(6)
+
         self.note = QLabel("No plottable single-axis result is loaded.")
         self.note.setWordWrap(False)
         self.note.setObjectName("resultsChartNote")
-        root.addWidget(self.note)
+        top.addWidget(self.note, 1)
 
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.tabs.setMinimumHeight(260)
-        root.addWidget(self.tabs, 1)
+        self.polar_button = QPushButton("Polar")
+        self.cartesian_button = QPushButton("Cartesian")
+        for button in (self.polar_button, self.cartesian_button):
+            button.setCheckable(True)
+            button.setMinimumWidth(88)
+            button.setObjectName("resultsChartModeButton")
+        self.polar_button.setChecked(True)
 
-        self.polar_figure = Figure(figsize=(5.6, 4.4), tight_layout=True)
+        self.view_group = QButtonGroup(self)
+        self.view_group.setExclusive(True)
+        self.view_group.addButton(self.polar_button, 0)
+        self.view_group.addButton(self.cartesian_button, 1)
+        self.view_group.idClicked.connect(self._select_view)
+
+        top.addWidget(self.polar_button)
+        top.addWidget(self.cartesian_button)
+        root.addLayout(top)
+
+        self.stack = QStackedWidget()
+        self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.stack.setMinimumHeight(180)
+        root.addWidget(self.stack, 1)
+
+        self.polar_figure = Figure(figsize=(6.2, 4.2))
         self.polar_canvas = FigureCanvasQTAgg(self.polar_figure)
         self.polar_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.polar_canvas.setMinimumHeight(230)
+        self.polar_canvas.setMinimumSize(200, 180)
+        self.polar_canvas.setStyleSheet("background-color: #101820;")
         polar_page = QWidget()
         polar_page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         polar_layout = QVBoxLayout(polar_page)
@@ -177,10 +216,11 @@ class ResultsCharts(QWidget):
         polar_layout.setSpacing(0)
         polar_layout.addWidget(self.polar_canvas, 1)
 
-        self.cartesian_figure = Figure(figsize=(6.4, 4.4), tight_layout=True)
+        self.cartesian_figure = Figure(figsize=(6.8, 4.2))
         self.cartesian_canvas = FigureCanvasQTAgg(self.cartesian_figure)
         self.cartesian_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.cartesian_canvas.setMinimumHeight(230)
+        self.cartesian_canvas.setMinimumSize(200, 180)
+        self.cartesian_canvas.setStyleSheet("background-color: #101820;")
         cartesian_page = QWidget()
         cartesian_page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         cartesian_layout = QVBoxLayout(cartesian_page)
@@ -188,20 +228,59 @@ class ResultsCharts(QWidget):
         cartesian_layout.setSpacing(0)
         cartesian_layout.addWidget(self.cartesian_canvas, 1)
 
-        self.tabs.addTab(polar_page, "Polar")
-        self.tabs.addTab(cartesian_page, "Cartesian")
+        self.stack.addWidget(polar_page)
+        self.stack.addWidget(cartesian_page)
+        self.stack.setCurrentIndex(0)
+
+        self.setStyleSheet(
+            """
+            QPushButton#resultsChartModeButton {
+                background-color: #14212B;
+                color: #D7E1E8;
+                border: 1px solid #34495E;
+                border-radius: 4px;
+                padding: 6px 12px;
+            }
+            QPushButton#resultsChartModeButton:checked {
+                background-color: #1769AA;
+                color: white;
+                border-color: #2C7DBB;
+            }
+            """
+        )
+
         self._clear_figures()
+
+    def _select_view(self, index):
+        self.stack.setCurrentIndex(index)
+        self._draw_visible_canvas()
 
     def set_run(self, run: MeasurementRun | None):
         self.run = run
         self.refresh()
+        QTimer.singleShot(0, self._draw_visible_canvas)
 
     def set_quantity(self, quantity: str):
         self.quantity = quantity if quantity in QUANTITY_MAP else "Candela"
         self.refresh()
+        QTimer.singleShot(0, self._draw_visible_canvas)
 
     def active_figure(self):
-        return self.polar_figure if self.tabs.currentIndex() == 0 else self.cartesian_figure
+        return self.polar_figure if self.stack.currentIndex() == 0 else self.cartesian_figure
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._draw_visible_canvas)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._draw_visible_canvas)
+
+    def _draw_visible_canvas(self):
+        if self.stack.currentIndex() == 0:
+            self.polar_canvas.draw()
+        else:
+            self.cartesian_canvas.draw()
 
     def _clear_figures(self, message="No data"):
         for figure, canvas in (
@@ -209,9 +288,9 @@ class ResultsCharts(QWidget):
             (self.cartesian_figure, self.cartesian_canvas),
         ):
             figure.clear()
+            figure.patch.set_facecolor("#101820")
             axis = figure.add_subplot(111)
             axis.set_facecolor("#111B23")
-            figure.patch.set_facecolor("#101820")
             axis.text(
                 0.5,
                 0.5,
@@ -222,7 +301,8 @@ class ResultsCharts(QWidget):
                 transform=axis.transAxes,
             )
             axis.set_axis_off()
-            canvas.draw_idle()
+            figure.subplots_adjust(left=0.08, right=0.96, bottom=0.10, top=0.90)
+            canvas.draw()
 
     def refresh(self):
         if self.run is None:
@@ -284,10 +364,11 @@ class ResultsCharts(QWidget):
         axis.set_title(
             f"Polar {series.quantity_label} • {series.axis_name} plane",
             color="#E4EEF5",
-            pad=18,
+            pad=14,
             fontweight="bold",
         )
-        self.polar_canvas.draw_idle()
+        self.polar_figure.subplots_adjust(left=0.06, right=0.94, bottom=0.08, top=0.88)
+        self.polar_canvas.draw()
 
     def _draw_cartesian(self, series: SingleAxisSeries):
         self.cartesian_figure.clear()
@@ -310,4 +391,5 @@ class ResultsCharts(QWidget):
             fontweight="bold",
         )
         axis.axvline(0.0, linewidth=0.8, alpha=0.35)
-        self.cartesian_canvas.draw_idle()
+        self.cartesian_figure.subplots_adjust(left=0.10, right=0.97, bottom=0.16, top=0.86)
+        self.cartesian_canvas.draw()
