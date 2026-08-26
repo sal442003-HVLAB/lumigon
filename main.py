@@ -26,6 +26,8 @@ from measurement_results_runtime import install_measurement_results_runtime
 from results_workspace import attach_results_workspace
 from results_viewport_fix import attach_results_viewport_fix
 from luxmeter_resilience import install_phamp_connect_retry
+from miol_profile_runtime import attach_miol_profile_runtime
+from miol_results_runtime import attach_miol_results_runtime
 
 from machine_config import (
     GAMMA_LIMIT_DEG,
@@ -198,9 +200,11 @@ def main():
     attach_results_workspace(window)
     attach_results_viewport_fix(window)
     attach_grid_results_runtime(window)
+    attach_miol_results_runtime(window)
     _apply_confirmed_axis_limits(window)
     attach_execution_mode_controls(window)
     attach_measurement_ui_fixes(window)
+    attach_miol_profile_runtime(window)
     attach_grid_step_runtime(window)
     attach_grid_validation_ui(window)
 
