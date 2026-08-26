@@ -22,9 +22,12 @@ from PySide6.QtWidgets import (
 from measurement_run import MeasurementRun
 
 
+CALCULATED_LUX = "Calculated Lux"
+
 QUANTITY_MAP = {
     "Candela": ("candela_cd", "Luminous intensity", "cd"),
-    "Lux": ("lux", "Illuminance", "lx"),
+    "Lux": ("lux", "Measured illuminance", "lx"),
+    CALCULATED_LUX: (None, "Calculated illuminance", "lx"),
     "Photocurrent": ("current_na", "Photocurrent", "nA"),
 }
 
@@ -56,15 +59,46 @@ def _unique(values, tolerance=1e-6):
     return result
 
 
-def extract_single_axis_series(run: MeasurementRun, quantity: str) -> SingleAxisSeries | None:
-    """Return an angle/value series when exactly one goniometer axis varies."""
+def extract_single_axis_series(
+    run: MeasurementRun,
+    quantity: str,
+    calculated_distance_m: float | None = None,
+) -> SingleAxisSeries | None:
+    """Return an angle/value series when exactly one goniometer axis varies.
+
+    ``Calculated Lux`` is derived from the stored candela values using the
+    inverse-square law, E = I / r^2.  The original measured Lux and Candela in
+    the run are never modified.
+    """
 
     attr, label, unit = QUANTITY_MAP.get(quantity, QUANTITY_MAP["Candela"])
+    calculated_lux = quantity == CALCULATED_LUX
+
+    distance_m = None
+    if calculated_lux:
+        try:
+            distance_m = float(calculated_distance_m)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(distance_m) or distance_m <= 0.0:
+            return None
+        attr = "candela_cd"
+        label = f"Calculated illuminance @ {distance_m:g} m"
+
     usable = []
     for point in run.points:
-        value = getattr(point, attr, None)
-        if value is not None and math.isfinite(float(value)):
-            usable.append((point, float(value)))
+        source_value = getattr(point, attr, None)
+        if source_value is None:
+            continue
+        try:
+            value = float(source_value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(value):
+            continue
+        if calculated_lux:
+            value = value / (distance_m * distance_m)
+        usable.append((point, value))
 
     if not usable:
         return None
@@ -165,6 +199,7 @@ class ResultsCharts(QWidget):
         super().__init__(parent)
         self.run = None
         self.quantity = "Candela"
+        self.calculation_distance_m = 10.0
         self.setMinimumSize(0, 0)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
 
@@ -271,6 +306,18 @@ class ResultsCharts(QWidget):
         self.refresh()
         QTimer.singleShot(0, self._draw_visible_canvas)
 
+    def set_calculation_distance(self, distance_m: float):
+        try:
+            distance_m = float(distance_m)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(distance_m) or distance_m <= 0.0:
+            return
+        self.calculation_distance_m = distance_m
+        if self.quantity == CALCULATED_LUX:
+            self.refresh()
+            QTimer.singleShot(0, self._draw_visible_canvas)
+
     def active_figure(self):
         return self.polar_figure if self.stack.currentIndex() == 0 else self.cartesian_figure
 
@@ -325,7 +372,11 @@ class ResultsCharts(QWidget):
             self._clear_figures("No measurement result")
             return
 
-        series = extract_single_axis_series(self.run, self.quantity)
+        series = extract_single_axis_series(
+            self.run,
+            self.quantity,
+            self.calculation_distance_m,
+        )
         if series is None:
             text = (
                 "This run varies both C and Gamma — Grid charts will be rendered as Heatmap, selectable planes and 3D distribution."
