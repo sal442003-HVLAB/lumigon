@@ -176,7 +176,11 @@ def benchmark_for(profile_type: str, condition: str) -> MiolBenchmark:
 
 def intensity_basis_for(profile_type: str) -> str:
     spec = MIOL_PROFILES[str(profile_type).upper()]
-    return "I-effective (Blondel-Rey)" if spec.flashing else "Steady luminous intensity"
+    return (
+        "I-effective (Blondel-Rey)"
+        if spec.flashing
+        else "Steady luminous intensity"
+    )
 
 
 def icao_elevation_from_gamma(gamma_deg: float) -> float:
@@ -278,7 +282,11 @@ def blondel_rey_effective(
     )
 
 
-def _interpolate(xs: Sequence[float], ys: Sequence[float], target: float) -> Optional[float]:
+def _interpolate(
+    xs: Sequence[float],
+    ys: Sequence[float],
+    target: float,
+) -> Optional[float]:
     pairs = sorted(
         (float(x), float(y))
         for x, y in zip(xs, ys)
@@ -296,7 +304,11 @@ def _interpolate(xs: Sequence[float], ys: Sequence[float], target: float) -> Opt
     return None
 
 
-def _beam_spread(xs: Sequence[float], ys: Sequence[float], threshold: float) -> Optional[float]:
+def _beam_spread(
+    xs: Sequence[float],
+    ys: Sequence[float],
+    threshold: float,
+) -> Optional[float]:
     """Return the widest contiguous angular interval at/above threshold."""
 
     pairs = sorted(
@@ -324,7 +336,9 @@ def _beam_spread(xs: Sequence[float], ys: Sequence[float], threshold: float) -> 
         if abs(y - y0) < 1e-12:
             crossing = (x0 + x) / 2.0
         else:
-            crossing = x0 + (threshold - y0) * (x - x0) / (y - y0)
+            crossing = x0 + (
+                (threshold - y0) * (x - x0) / (y - y0)
+            )
 
         if above and not prev_above:
             active_start = crossing
@@ -347,6 +361,7 @@ def _c_coverage(c_values: Iterable[float]) -> tuple[float, bool]:
     gaps.append(values[0] + 360.0 - values[-1])
     largest_gap = max(gaps)
     coverage = max(0.0, 360.0 - largest_gap)
+    # Accept common 2.5°/5° full grids while rejecting the current limited C scan.
     return coverage, coverage >= 350.0
 
 
@@ -358,7 +373,10 @@ def _series_for_c(points, c_target: float):
         {float(p.c_deg) for p in usable},
         key=lambda value: abs(value - c_target),
     )
-    selected = [p for p in usable if abs(float(p.c_deg) - c_nearest) <= 1e-4]
+    selected = [
+        p for p in usable
+        if abs(float(p.c_deg) - c_nearest) <= 1e-4
+    ]
     selected.sort(key=lambda p: icao_elevation_from_gamma(p.gamma_deg))
     return (
         [icao_elevation_from_gamma(p.gamma_deg) for p in selected],
@@ -366,12 +384,19 @@ def _series_for_c(points, c_target: float):
     )
 
 
-def analyse_miol_run(run, *, selected_c_deg: Optional[float] = None) -> Optional[MiolComplianceResult]:
+def analyse_miol_run(
+    run,
+    *,
+    selected_c_deg: Optional[float] = None,
+) -> Optional[MiolComplianceResult]:
     profile_type = profile_type_from_text(getattr(run, "profile", ""))
     if profile_type is None:
         return None
 
-    condition = condition_from_standard(getattr(run, "standard", ""), profile_type)
+    condition = condition_from_standard(
+        getattr(run, "standard", ""),
+        profile_type,
+    )
     benchmark = benchmark_for(profile_type, condition)
     basis = intensity_basis_for(profile_type)
 
@@ -381,8 +406,19 @@ def analyse_miol_run(run, *, selected_c_deg: Optional[float] = None) -> Optional
     ]
     if not usable:
         return MiolComplianceResult(
-            profile_type, condition, basis, benchmark, 0.0, False, tuple(),
-            "NO PHOTOMETRIC DATA", None, None, None, None, None,
+            profile_type,
+            condition,
+            basis,
+            benchmark,
+            0.0,
+            False,
+            tuple(),
+            "NO PHOTOMETRIC DATA",
+            None,
+            None,
+            None,
+            None,
+            None,
         )
 
     c_values = sorted({float(p.c_deg) for p in usable})
@@ -395,14 +431,18 @@ def analyse_miol_run(run, *, selected_c_deg: Optional[float] = None) -> Optional
     plane_im1 = _interpolate(elevations, plane_values, -1.0)
     plane_im10 = _interpolate(elevations, plane_values, -10.0)
     plane_spread = _beam_spread(
-        elevations, plane_values, benchmark.beam_threshold_cd
+        elevations,
+        plane_values,
+        benchmark.beam_threshold_cd,
     )
 
     rows: list[ComplianceRow] = []
 
     def local_min_row(name, measured, limit):
-        status = "N/E" if measured is None else (
-            "LOCAL PASS" if measured >= limit else "LOCAL FAIL"
+        status = (
+            "N/E"
+            if measured is None
+            else ("LOCAL PASS" if measured >= limit else "LOCAL FAIL")
         )
         rows.append(ComplianceRow(
             name,
@@ -412,15 +452,33 @@ def analyse_miol_run(run, *, selected_c_deg: Optional[float] = None) -> Optional
             True,
         ))
 
-    local_min_row("Selected plane intensity @ 0°", plane_i0, benchmark.min_0_cd)
-    local_min_row("Selected plane intensity @ -1°", plane_im1, benchmark.min_minus1_cd)
+    local_min_row(
+        "Selected plane intensity @ 0°",
+        plane_i0,
+        benchmark.min_0_cd,
+    )
+    local_min_row(
+        "Selected plane intensity @ -1°",
+        plane_im1,
+        benchmark.min_minus1_cd,
+    )
 
     for name, measured, limit in (
-        ("Selected plane intensity @ 0° — recommended max", plane_i0, benchmark.rec_max_0_cd),
-        ("Selected plane intensity @ -1° — recommended max", plane_im1, benchmark.rec_max_minus1_cd),
+        (
+            "Selected plane intensity @ 0° — recommended max",
+            plane_i0,
+            benchmark.rec_max_0_cd,
+        ),
+        (
+            "Selected plane intensity @ -1° — recommended max",
+            plane_im1,
+            benchmark.rec_max_minus1_cd,
+        ),
     ):
-        status = "N/E" if measured is None else (
-            "REC PASS" if measured <= limit else "REC HIGH"
+        status = (
+            "N/E"
+            if measured is None
+            else ("REC PASS" if measured <= limit else "REC HIGH")
         )
         rows.append(ComplianceRow(
             name,
@@ -440,13 +498,22 @@ def analyse_miol_run(run, *, selected_c_deg: Optional[float] = None) -> Optional
     rows.append(ComplianceRow(
         "Selected plane vertical beam spread",
         "—" if plane_spread is None else f"{plane_spread:.2f}°",
-        f"≥ {benchmark.min_beam_spread_deg:.0f}° at ≥ {benchmark.beam_threshold_cd:.0f} cd",
+        (
+            f"≥ {benchmark.min_beam_spread_deg:.0f}° at "
+            f"≥ {benchmark.beam_threshold_cd:.0f} cd"
+        ),
         spread_status,
         True,
     ))
 
-    rec_status = "N/E" if plane_im10 is None else (
-        "REC PASS" if plane_im10 <= benchmark.rec_max_minus10_cd else "REC HIGH"
+    rec_status = (
+        "N/E"
+        if plane_im10 is None
+        else (
+            "REC PASS"
+            if plane_im10 <= benchmark.rec_max_minus10_cd
+            else "REC HIGH"
+        )
     )
     rows.append(ComplianceRow(
         "Selected plane intensity @ -10°",
@@ -456,32 +523,81 @@ def analyse_miol_run(run, *, selected_c_deg: Optional[float] = None) -> Optional
         False,
     ))
 
+    # Full-azimuth Table 6-3 checks. Every C plane contributes its interpolated
+    # values at the required ICAO vertical elevations and its beam spread.
     c_i0 = []
     c_im1 = []
     c_im10 = []
+    c_spreads = []
     for c in c_values:
         xs, ys = _series_for_c(usable, c)
         v0 = _interpolate(xs, ys, 0.0)
         vm1 = _interpolate(xs, ys, -1.0)
         vm10 = _interpolate(xs, ys, -10.0)
+        spread = _beam_spread(xs, ys, benchmark.beam_threshold_cd)
         if v0 is not None:
             c_i0.append(v0)
         if vm1 is not None:
             c_im1.append(vm1)
         if vm10 is not None:
             c_im10.append(vm10)
+        if spread is not None:
+            c_spreads.append(spread)
 
-    def full_row(name, measured_value, requirement, pass_test, mandatory=True):
+    def _not_evaluated_text():
+        if not full_360:
+            return f"N/E — C coverage {coverage:.1f}° / 360°"
+        return "N/E — required vertical elevation not covered"
+
+    def full_row(
+        name,
+        measured_value,
+        requirement,
+        pass_test,
+        mandatory=True,
+    ):
         if not full_360 or measured_value is None:
-            measured = f"N/E — C coverage {coverage:.1f}° / 360°"
+            measured = _not_evaluated_text()
             status = "N/E"
         else:
             measured = f"{measured_value:.1f} cd"
             if mandatory:
                 status = "PASS" if pass_test(measured_value) else "FAIL"
             else:
-                status = "REC PASS" if pass_test(measured_value) else "REC HIGH"
-        rows.append(ComplianceRow(name, measured, requirement, status, mandatory))
+                status = (
+                    "REC PASS"
+                    if pass_test(measured_value)
+                    else "REC HIGH"
+                )
+        rows.append(ComplianceRow(
+            name,
+            measured,
+            requirement,
+            status,
+            mandatory,
+        ))
+
+    def full_spread_row(measured_value):
+        if not full_360 or measured_value is None:
+            measured = _not_evaluated_text()
+            status = "N/E"
+        else:
+            measured = f"{measured_value:.2f}°"
+            status = (
+                "PASS"
+                if measured_value >= benchmark.min_beam_spread_deg
+                else "FAIL"
+            )
+        rows.append(ComplianceRow(
+            "360° minimum vertical beam spread",
+            measured,
+            (
+                f"≥ {benchmark.min_beam_spread_deg:.0f}° at "
+                f"≥ {benchmark.beam_threshold_cd:.0f} cd"
+            ),
+            status,
+            True,
+        ))
 
     full_row(
         "360° average intensity @ 0°",
@@ -501,6 +617,7 @@ def analyse_miol_run(run, *, selected_c_deg: Optional[float] = None) -> Optional
         f"≥ {benchmark.min_minus1_cd:.0f} cd",
         lambda value: value >= benchmark.min_minus1_cd,
     )
+    full_spread_row(min(c_spreads) if c_spreads else None)
     full_row(
         "360° maximum intensity @ 0°",
         max(c_i0) if c_i0 else None,
@@ -524,22 +641,35 @@ def analyse_miol_run(run, *, selected_c_deg: Optional[float] = None) -> Optional
     )
 
     mandatory_local = [
-        row for row in rows
+        row
+        for row in rows
         if row.mandatory and row.status.startswith("LOCAL")
     ]
     local_fail = any(row.status == "LOCAL FAIL" for row in mandatory_local)
-    full_mandatory = [
-        row for row in rows
-        if row.mandatory and row.status in ("PASS", "FAIL")
-    ]
-    full_fail = any(row.status == "FAIL" for row in full_mandatory)
 
-    if full_360:
-        overall = "FAIL" if full_fail or local_fail else "PASS"
+    full_required = [
+        row
+        for row in rows
+        if row.mandatory and row.item.startswith("360°")
+    ]
+    full_fail = any(row.status == "FAIL" for row in full_required)
+    full_missing = any(row.status == "N/E" for row in full_required)
+
+    if full_360 and full_fail:
+        overall = "FAIL"
+    elif full_360 and full_missing:
+        overall = "PARTIAL — REQUIRED ICAO ITEMS NOT EVALUATED"
+    elif full_360:
+        overall = "PASS"
     elif local_fail:
-        overall = "PARTIAL — LOCAL VERTICAL CHECK FAILED; 360° NOT EVALUATED"
+        overall = (
+            "PARTIAL — LOCAL VERTICAL CHECK FAILED; 360° NOT EVALUATED"
+        )
     else:
-        overall = "PARTIAL — LOCAL VERTICAL CHECK ONLY; 360° AZIMUTH NOT EVALUATED"
+        overall = (
+            "PARTIAL — LOCAL VERTICAL CHECK ONLY; "
+            "360° AZIMUTH NOT EVALUATED"
+        )
 
     return MiolComplianceResult(
         profile_type=profile_type,
