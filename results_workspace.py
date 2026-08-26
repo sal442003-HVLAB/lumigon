@@ -40,13 +40,22 @@ def _caption(text):
     return label
 
 
+def _make_flexible(label: QLabel, *, wrap=False):
+    """Prevent dynamic text from increasing the Results page minimum width."""
+    label.setWordWrap(bool(wrap))
+    label.setMinimumWidth(0)
+    label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+    return label
+
+
 class ResultsWorkspace(QWidget):
     def __init__(self, host_window):
         super().__init__()
         self.host_window = host_window
         self.latest_run: MeasurementRun | None = None
         self.setObjectName("resultsWorkspace")
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(0, 0)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 10, 14, 10)
@@ -65,7 +74,7 @@ class ResultsWorkspace(QWidget):
             "Photometric analysis from the active Measurement Run or a previously saved Lumigon CSV."
         )
         subtitle.setObjectName("resultsSubtitle")
-        subtitle.setWordWrap(True)
+        _make_flexible(subtitle, wrap=True)
         title_block.addWidget(title)
         title_block.addWidget(subtitle)
         header.addLayout(title_block, 1)
@@ -85,15 +94,15 @@ class ResultsWorkspace(QWidget):
             "Complete a Measurement run or use Load CSV to reopen a saved Lumigon result."
         )
         self.empty_label.setObjectName("resultsEmptyState")
-        self.empty_label.setWordWrap(True)
+        _make_flexible(self.empty_label, wrap=True)
         root.addWidget(self.empty_label)
 
         # --------------------------------------------------------------
-        # Compact summary row.  The previous form used eight vertical rows and
-        # pushed the Matplotlib canvases below the visible area on 900 px screens.
-        # Keep the same information but present it in two compact cards.
+        # Compact summary row.
         # --------------------------------------------------------------
         summary_box = QGroupBox("Measurement Run")
+        summary_box.setMinimumWidth(0)
+        summary_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         summary = QGridLayout(summary_box)
         summary.setContentsMargins(10, 9, 10, 9)
         summary.setHorizontalSpacing(10)
@@ -101,17 +110,12 @@ class ResultsWorkspace(QWidget):
 
         self.run_id_label = QLabel("—")
         self.sample_label = QLabel("—")
-        self.profile_label = QLabel("—")
-        self.scan_label = QLabel("—")
+        self.profile_label = _make_flexible(QLabel("—"))
+        self.scan_label = _make_flexible(QLabel("—"))
         self.points_label = QLabel("—")
         self.duration_label = QLabel("—")
-        self.home_label = QLabel("—")
-        self.csv_label = QLabel("—")
-
-        self.profile_label.setWordWrap(False)
-        self.scan_label.setWordWrap(False)
-        self.home_label.setWordWrap(False)
-        self.csv_label.setWordWrap(False)
+        self.home_label = _make_flexible(QLabel("—"))
+        self.csv_label = _make_flexible(QLabel("—"))
         self.csv_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
         summary.addWidget(_caption("Run ID:"), 0, 0)
@@ -139,6 +143,8 @@ class ResultsWorkspace(QWidget):
         summary.setColumnStretch(3, 2)
 
         metrics_box = QGroupBox("Photometric Summary")
+        metrics_box.setMinimumWidth(0)
+        metrics_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         metrics = QGridLayout(metrics_box)
         metrics.setContentsMargins(10, 9, 10, 9)
         metrics.setHorizontalSpacing(10)
@@ -147,9 +153,9 @@ class ResultsWorkspace(QWidget):
         self.max_lux_label = QLabel("—")
         self.max_candela_label = QLabel("—")
         self.max_current_label = QLabel("—")
-        self.peak_angle_label = QLabel("—")
+        self.peak_angle_label = _make_flexible(QLabel("—"))
         self.mean_candela_label = QLabel("—")
-        self.fwhm_label = QLabel("—")
+        self.fwhm_label = _make_flexible(QLabel("—"))
 
         metrics.addWidget(_caption("Max Lux:"), 0, 0)
         metrics.addWidget(self.max_lux_label, 0, 1)
@@ -175,6 +181,8 @@ class ResultsWorkspace(QWidget):
         # Analysis controls
         # --------------------------------------------------------------
         analysis_box = QGroupBox("Analysis")
+        analysis_box.setMinimumWidth(0)
+        analysis_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         analysis_layout = QHBoxLayout(analysis_box)
         analysis_layout.setContentsMargins(10, 7, 10, 7)
         analysis_layout.setSpacing(8)
@@ -193,7 +201,7 @@ class ResultsWorkspace(QWidget):
             "Candela is the default photometric quantity. Polar and Cartesian views use the same measured points."
         )
         self.analysis_note.setObjectName("resultsAnalysisNote")
-        self.analysis_note.setWordWrap(False)
+        _make_flexible(self.analysis_note)
         analysis_layout.addWidget(self.analysis_note, 1)
 
         self.export_plot_button = QPushButton("Export Plot")
@@ -202,9 +210,12 @@ class ResultsWorkspace(QWidget):
         analysis_layout.addWidget(self.export_plot_button)
         root.addWidget(analysis_box)
 
-        # Charts own all remaining vertical space.
+        # Charts own all remaining vertical space, but may never dictate the
+        # window's horizontal size. FigureCanvas size hints are intentionally
+        # ignored so loading data cannot make the maximized HMI appear zoomed.
         self.charts = ResultsCharts(self)
-        self.charts.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.charts.setMinimumWidth(0)
+        self.charts.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         self.charts.setMinimumHeight(280)
         root.addWidget(self.charts, 1)
         root.setStretchFactor(self.charts, 1)
@@ -262,12 +273,15 @@ class ResultsWorkspace(QWidget):
         self.profile_label.setText(
             f"{run.application} / {run.product} / {run.profile}"
         )
+        self.profile_label.setToolTip(self.profile_label.text())
         self.scan_label.setText(
             f"{run.execution_mode} • {run.scan_mode} • distance {run.distance_m:.2f} m"
         )
+        self.scan_label.setToolTip(self.scan_label.text())
         self.points_label.setText(str(run.point_count))
         self.duration_label.setText(f"{run.duration_s:.1f} s")
         self.home_label.setText(run.home_status)
+        self.home_label.setToolTip(run.home_status)
 
         if run.csv_path is not None:
             full_path = str(run.csv_path)
@@ -320,13 +334,15 @@ class ResultsWorkspace(QWidget):
             self.quantity_combo.currentText(),
         )
         if series is None:
-            self.analysis_note.setText(
+            text = (
                 "C × Gamma data detected — Heatmap, selectable planes and 3D distribution will use this run."
             )
         else:
-            self.analysis_note.setText(
+            text = (
                 f"{series.axis_name} sweep • {series.fixed_axis_name} = {series.fixed_angle:+.3f}° • sorted by physical angle."
             )
+        self.analysis_note.setText(text)
+        self.analysis_note.setToolTip(text)
 
     def load_csv(self):
         directory = measurement_data_directory()
