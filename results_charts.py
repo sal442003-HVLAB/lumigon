@@ -155,18 +155,18 @@ def beam_metrics(series: SingleAxisSeries | None) -> BeamMetrics:
 class ResultsCharts(QWidget):
     """Polar and Cartesian charts driven by the active MeasurementRun.
 
-    A QStackedWidget is used instead of a nested QTabWidget.  On some Windows /
-    PySide6 layouts the nested tab pane kept a valid Matplotlib canvas but gave
-    its page an unusable viewport height.  The explicit stack is simpler and
-    reliably gives the active FigureCanvas all remaining Results space.
+    FigureCanvas reports a size hint based on figure DPI. In a normal standalone
+    window that is useful, but inside Lumigon it must never be allowed to enlarge
+    the maximized HMI. All chart containers therefore ignore horizontal size hints
+    and adapt strictly to the viewport assigned by Qt.
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.run = None
         self.quantity = "Candela"
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setMinimumHeight(210)
+        self.setMinimumSize(0, 0)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -178,6 +178,8 @@ class ResultsCharts(QWidget):
 
         self.note = QLabel("No plottable single-axis result is loaded.")
         self.note.setWordWrap(False)
+        self.note.setMinimumWidth(0)
+        self.note.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.note.setObjectName("resultsChartNote")
         top.addWidget(self.note, 1)
 
@@ -200,17 +202,16 @@ class ResultsCharts(QWidget):
         root.addLayout(top)
 
         self.stack = QStackedWidget()
-        self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.stack.setMinimumHeight(180)
+        self.stack.setMinimumSize(0, 0)
+        self.stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         root.addWidget(self.stack, 1)
 
         self.polar_figure = Figure(figsize=(6.2, 4.2))
         self.polar_canvas = FigureCanvasQTAgg(self.polar_figure)
-        self.polar_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.polar_canvas.setMinimumSize(200, 180)
-        self.polar_canvas.setStyleSheet("background-color: #101820;")
+        self._configure_canvas(self.polar_canvas)
         polar_page = QWidget()
-        polar_page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        polar_page.setMinimumSize(0, 0)
+        polar_page.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         polar_layout = QVBoxLayout(polar_page)
         polar_layout.setContentsMargins(0, 0, 0, 0)
         polar_layout.setSpacing(0)
@@ -218,11 +219,10 @@ class ResultsCharts(QWidget):
 
         self.cartesian_figure = Figure(figsize=(6.8, 4.2))
         self.cartesian_canvas = FigureCanvasQTAgg(self.cartesian_figure)
-        self.cartesian_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.cartesian_canvas.setMinimumSize(200, 180)
-        self.cartesian_canvas.setStyleSheet("background-color: #101820;")
+        self._configure_canvas(self.cartesian_canvas)
         cartesian_page = QWidget()
-        cartesian_page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        cartesian_page.setMinimumSize(0, 0)
+        cartesian_page.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         cartesian_layout = QVBoxLayout(cartesian_page)
         cartesian_layout.setContentsMargins(0, 0, 0, 0)
         cartesian_layout.setSpacing(0)
@@ -251,9 +251,15 @@ class ResultsCharts(QWidget):
 
         self._clear_figures()
 
+    @staticmethod
+    def _configure_canvas(canvas):
+        canvas.setMinimumSize(0, 0)
+        canvas.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
+        canvas.setStyleSheet("background-color: #101820;")
+
     def _select_view(self, index):
         self.stack.setCurrentIndex(index)
-        self._draw_visible_canvas()
+        QTimer.singleShot(0, self._draw_visible_canvas)
 
     def set_run(self, run: MeasurementRun | None):
         self.run = run
@@ -277,10 +283,18 @@ class ResultsCharts(QWidget):
         QTimer.singleShot(0, self._draw_visible_canvas)
 
     def _draw_visible_canvas(self):
-        if self.stack.currentIndex() == 0:
-            self.polar_canvas.draw()
-        else:
-            self.cartesian_canvas.draw()
+        canvas = self.polar_canvas if self.stack.currentIndex() == 0 else self.cartesian_canvas
+        if canvas.width() > 1 and canvas.height() > 1:
+            canvas.draw()
+
+    def geometry_diagnostics(self):
+        canvas = self.polar_canvas if self.stack.currentIndex() == 0 else self.cartesian_canvas
+        return (
+            f"charts={self.width()}x{self.height()}, "
+            f"stack={self.stack.width()}x{self.stack.height()}, "
+            f"canvas={canvas.width()}x{canvas.height()}, "
+            f"visible={canvas.isVisible()}"
+        )
 
     def _clear_figures(self, message="No data"):
         for figure, canvas in (
@@ -307,20 +321,26 @@ class ResultsCharts(QWidget):
     def refresh(self):
         if self.run is None:
             self.note.setText("No plottable single-axis result is loaded.")
+            self.note.setToolTip("")
             self._clear_figures("No measurement result")
             return
 
         series = extract_single_axis_series(self.run, self.quantity)
         if series is None:
-            self.note.setText(
+            text = (
                 "This run varies both C and Gamma — Grid charts will be rendered as Heatmap, selectable planes and 3D distribution."
             )
+            self.note.setText(text)
+            self.note.setToolTip(text)
             self._clear_figures("C × Gamma result — grid charts pending")
             return
 
-        self.note.setText(
-            f"{series.axis_name} sweep • {series.fixed_axis_name} fixed at {series.fixed_angle:+.3f}° • {series.quantity_label} ({series.unit})"
+        text = (
+            f"{series.axis_name} sweep • {series.fixed_axis_name} fixed at {series.fixed_angle:+.3f}° • "
+            f"{series.quantity_label} ({series.unit})"
         )
+        self.note.setText(text)
+        self.note.setToolTip(text)
         self._draw_polar(series)
         self._draw_cartesian(series)
 
