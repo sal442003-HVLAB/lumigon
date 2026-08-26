@@ -9,8 +9,6 @@ from PySide6.QtWidgets import (
 )
 
 from machine_config import (
-    GAMMA_ID,
-    C_ID,
     P1_36,
     P5_20,
     P5_60,
@@ -63,7 +61,6 @@ def _build_axis_profile_box(window, axis, speed_default, ramp_default, scurve_de
     status = QLabel("Not applied in this session")
     status.setWordWrap(True)
 
-    # Compact vertical layout so the profile card can sit beside its axis card.
     layout.addWidget(QLabel("Speed:"), 0, 0)
     layout.addWidget(speed, 0, 1)
     layout.addWidget(QLabel("Ramp (Accel/Decel):"), 1, 0)
@@ -121,6 +118,7 @@ def _build_axis_profile_box(window, axis, speed_default, ramp_default, scurve_de
             window.motion.set_expected_profile(
                 axis,
                 speed_readback,
+                ramp_readback,
                 scurve_readback,
             )
 
