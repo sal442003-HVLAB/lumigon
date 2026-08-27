@@ -26,6 +26,7 @@ from test_plan_workspace import attach_test_plan_workspace
 from test_plan_runtime_improvements import install_test_plan_runtime_improvements
 from run_progress_refinement import install_run_progress_refinement
 from grid_step_runtime import install_grid_step_runtime, attach_grid_step_runtime
+from test_plan_reuse_eta_refinement import install_test_plan_reuse_eta_refinement
 from grid_validation_ui import attach_grid_validation_ui
 from grid_results_runtime import attach_grid_results_runtime
 from measurement_results_runtime import install_measurement_results_runtime
@@ -191,6 +192,7 @@ def main():
     install_test_plan_runtime_improvements()
     install_run_progress_refinement()
     install_grid_step_runtime()
+    install_test_plan_reuse_eta_refinement()
     install_measurement_results_runtime()
 
     window = MainWindow()
