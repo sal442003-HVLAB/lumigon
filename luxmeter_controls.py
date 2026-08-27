@@ -25,8 +25,8 @@ DEFAULT_LUXMETER_PORT = "COM9"
 DEFAULT_SAMPLES = 5
 DEFAULT_LIVE_INTERVAL_MS = 100
 
-LUXMETER_CG = "C&G Ph-Amp MB7"
-LUXMETER_GIGAHERTZ = "Gigahertz-Optik P-9710"
+LUXMETER_CG = "Czibula & Grundmann — Ph-Amp MB7"
+LUXMETER_GIGAHERTZ = "Gigahertz-Optik — P-9710"
 
 
 class LuxmeterLiveWorker(QThread):
@@ -69,7 +69,6 @@ class LuxmeterLiveWorker(QThread):
             elapsed_ms = (time.monotonic() - cycle_started) * 1000.0
             remaining_ms = max(0.0, self.interval_ms - elapsed_ms)
 
-            # Sleep in short pieces so Stop Live reacts promptly.
             while remaining_ms > 0 and not self.isInterruptionRequested():
                 chunk_ms = min(10, int(remaining_ms))
                 if chunk_ms <= 0:
@@ -208,8 +207,6 @@ def attach_luxmeter_controls(window):
         connect_button.setEnabled(not connected and not live)
         disconnect_button.setEnabled(connected)
 
-        # These controls currently belong to the C&G Ph-Amp driver. P-9710
-        # parameters will be exposed when its RS232 driver is added.
         sensitivity_spin.setEnabled(cg_selected and not live)
         integration_spin.setEnabled(cg_selected and not live)
         live_interval_spin.setEnabled(cg_selected and not live)
@@ -399,7 +396,6 @@ def attach_luxmeter_controls(window):
         restore_error = None
         if meter is not None and meter.is_connected:
             try:
-                # Formal Read Lux uses T1 so every M? acquires a fresh sample.
                 meter.set_software_trigger()
             except Exception as exc:
                 restore_error = str(exc)
@@ -422,10 +418,6 @@ def attach_luxmeter_controls(window):
 
         try:
             _apply_measurement_settings(meter)
-
-            # T0 is the correct mode for a real-time display: the Ph-Amp measures
-            # continuously and M? returns the latest completed reading instead of
-            # starting a brand-new integration for every UI refresh.
             meter.set_internal_trigger()
         except (PhAmpError, ValueError) as exc:
             QMessageBox.critical(window, "Luxmeter Live Setup Error", str(exc))
@@ -498,5 +490,4 @@ def attach_luxmeter_controls(window):
     window.luxmeter_last_live_timestamp = None
     window.luxmeter_last_live_interval_ms = None
 
-    instrument_changed()
     _update_controls()
