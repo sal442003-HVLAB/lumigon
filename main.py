@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from main_window import MainWindow
 from axis_profile_controls import attach_axis_profile_controls
+from motor_control_refinement import attach_motor_control_refinement
 from luxmeter_controls import attach_luxmeter_controls
 from tabbed_layout import organize_main_window_tabs
 from execution_mode_controls import attach_execution_mode_controls
@@ -191,6 +192,7 @@ def main():
     install_measurement_results_runtime()
 
     window = MainWindow()
+    attach_motor_control_refinement(window)
     attach_axis_profile_controls(window)
     attach_luxmeter_controls(window)
 
