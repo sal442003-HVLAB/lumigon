@@ -25,6 +25,9 @@ DEFAULT_LUXMETER_PORT = "COM9"
 DEFAULT_SAMPLES = 5
 DEFAULT_LIVE_INTERVAL_MS = 100
 
+LUXMETER_CG = "C&G Ph-Amp MB7"
+LUXMETER_GIGAHERTZ = "Gigahertz-Optik P-9710"
+
 
 class LuxmeterLiveWorker(QThread):
     """Poll the latest Ph-Amp reading continuously without blocking the GUI."""
@@ -80,7 +83,7 @@ def _available_ports():
 
 
 def attach_luxmeter_controls(window):
-    """Attach independent Ph-Amp MB7 controls to the main HMI."""
+    """Attach selectable luxmeter controls to the main HMI."""
 
     central = window.centralWidget()
     if central is None or central.layout() is None:
@@ -89,8 +92,18 @@ def attach_luxmeter_controls(window):
     parent_layout = central.layout()
     insert_index = max(0, parent_layout.count() - 2)
 
-    box = QGroupBox("Luxmeter — C&G Ph-Amp MB7")
+    box = QGroupBox(f"Luxmeter — {LUXMETER_CG}")
     layout = QGridLayout()
+
+    instrument_combo = QComboBox()
+    instrument_combo.addItems([
+        LUXMETER_CG,
+        LUXMETER_GIGAHERTZ,
+    ])
+    instrument_combo.setCurrentText(LUXMETER_CG)
+    instrument_combo.setToolTip(
+        "Select the photometer/luxmeter used for this Lumigon session."
+    )
 
     port_combo = QComboBox()
     port_combo.setEditable(True)
@@ -139,31 +152,34 @@ def attach_luxmeter_controls(window):
     lux_label = QLabel("Lux: —")
     stability_label = QLabel("Std. dev.: —")
 
-    layout.addWidget(QLabel("Port:"), 0, 0)
-    layout.addWidget(port_combo, 0, 1)
-    layout.addWidget(refresh_ports_button, 0, 2)
-    layout.addWidget(connect_button, 0, 3)
-    layout.addWidget(disconnect_button, 0, 4)
+    layout.addWidget(QLabel("Instrument:"), 0, 0)
+    layout.addWidget(instrument_combo, 0, 1, 1, 3)
     layout.addWidget(status_label, 0, 5)
 
-    layout.addWidget(QLabel("Sensitivity:"), 1, 0)
-    layout.addWidget(sensitivity_spin, 1, 1)
-    layout.addWidget(QLabel("Samples:"), 1, 2)
-    layout.addWidget(samples_spin, 1, 3)
-    layout.addWidget(QLabel("Integration:"), 1, 4)
-    layout.addWidget(integration_spin, 1, 5)
+    layout.addWidget(QLabel("Port:"), 1, 0)
+    layout.addWidget(port_combo, 1, 1)
+    layout.addWidget(refresh_ports_button, 1, 2)
+    layout.addWidget(connect_button, 1, 3)
+    layout.addWidget(disconnect_button, 1, 4)
 
-    layout.addWidget(read_button, 2, 0)
-    layout.addWidget(start_live_button, 2, 1)
-    layout.addWidget(stop_live_button, 2, 2)
-    layout.addWidget(QLabel("Poll interval:"), 2, 3)
-    layout.addWidget(live_interval_spin, 2, 4)
-    layout.addWidget(live_status_label, 2, 5)
+    layout.addWidget(QLabel("Sensitivity:"), 2, 0)
+    layout.addWidget(sensitivity_spin, 2, 1)
+    layout.addWidget(QLabel("Samples:"), 2, 2)
+    layout.addWidget(samples_spin, 2, 3)
+    layout.addWidget(QLabel("Integration:"), 2, 4)
+    layout.addWidget(integration_spin, 2, 5)
 
-    layout.addWidget(current_label, 3, 0, 1, 2)
-    layout.addWidget(lux_label, 3, 2)
-    layout.addWidget(stability_label, 3, 3)
-    layout.addWidget(id_label, 3, 4, 1, 2)
+    layout.addWidget(read_button, 3, 0)
+    layout.addWidget(start_live_button, 3, 1)
+    layout.addWidget(stop_live_button, 3, 2)
+    layout.addWidget(QLabel("Poll interval:"), 3, 3)
+    layout.addWidget(live_interval_spin, 3, 4)
+    layout.addWidget(live_status_label, 3, 5)
+
+    layout.addWidget(current_label, 4, 0, 1, 2)
+    layout.addWidget(lux_label, 4, 2)
+    layout.addWidget(stability_label, 4, 3)
+    layout.addWidget(id_label, 4, 4, 1, 2)
 
     box.setLayout(layout)
 
@@ -177,24 +193,46 @@ def attach_luxmeter_controls(window):
             return worker
         return None
 
+    def _selected_instrument():
+        return instrument_combo.currentText()
+
     def _update_controls():
         meter = getattr(window, "luxmeter", None)
         connected = meter is not None and meter.is_connected
         live = _live_worker() is not None
+        cg_selected = _selected_instrument() == LUXMETER_CG
 
+        instrument_combo.setEnabled(not connected and not live)
         port_combo.setEnabled(not connected and not live)
         refresh_ports_button.setEnabled(not connected and not live)
         connect_button.setEnabled(not connected and not live)
         disconnect_button.setEnabled(connected)
 
-        sensitivity_spin.setEnabled(not live)
-        integration_spin.setEnabled(not live)
-        live_interval_spin.setEnabled(not live)
-        samples_spin.setEnabled(not live)
+        # These controls currently belong to the C&G Ph-Amp driver. P-9710
+        # parameters will be exposed when its RS232 driver is added.
+        sensitivity_spin.setEnabled(cg_selected and not live)
+        integration_spin.setEnabled(cg_selected and not live)
+        live_interval_spin.setEnabled(cg_selected and not live)
+        samples_spin.setEnabled(cg_selected and not live)
 
-        read_button.setEnabled(connected and not live)
-        start_live_button.setEnabled(connected and not live)
+        read_button.setEnabled(cg_selected and connected and not live)
+        start_live_button.setEnabled(cg_selected and connected and not live)
         stop_live_button.setEnabled(live)
+
+    def instrument_changed(*_args):
+        selected = _selected_instrument()
+        box.setTitle(f"Luxmeter — {selected}")
+        window.luxmeter_selected_instrument = selected
+
+        if selected == LUXMETER_GIGAHERTZ:
+            id_label.setText("P-9710 RS232 driver: pending hardware validation")
+            current_label.setText("Current: —")
+            lux_label.setText("Lux: —")
+            stability_label.setText("Std. dev.: —")
+        else:
+            id_label.setText("Firmware: —")
+
+        _update_controls()
 
     def refresh_ports():
         current = port_combo.currentText().strip()
@@ -237,6 +275,19 @@ def attach_luxmeter_controls(window):
         return True
 
     def connect_luxmeter():
+        selected = _selected_instrument()
+        window.luxmeter_selected_instrument = selected
+
+        if selected == LUXMETER_GIGAHERTZ:
+            QMessageBox.information(
+                window,
+                "Gigahertz-Optik P-9710",
+                "P-9710 has been selected for this session.\n\n"
+                "Its RS232 command set is available, but the Lumigon P-9710 driver "
+                "will be enabled after connection and hardware validation with the instrument.",
+            )
+            return
+
         port = port_combo.currentText().strip()
         if not port:
             QMessageBox.warning(window, "Luxmeter Port", "Select a COM port first.")
@@ -410,6 +461,7 @@ def attach_luxmeter_controls(window):
         live_status_label.setText("Live: Stopping…")
         worker.requestInterruption()
 
+    instrument_combo.currentIndexChanged.connect(instrument_changed)
     refresh_ports_button.clicked.connect(refresh_ports)
     connect_button.clicked.connect(connect_luxmeter)
     disconnect_button.clicked.connect(disconnect_luxmeter)
@@ -420,6 +472,8 @@ def attach_luxmeter_controls(window):
     parent_layout.insertWidget(insert_index, box)
 
     window.luxmeter_box = box
+    window.luxmeter_instrument_combo = instrument_combo
+    window.luxmeter_selected_instrument = instrument_combo.currentText()
     window.luxmeter_port_combo = port_combo
     window.luxmeter_refresh_ports_button = refresh_ports_button
     window.luxmeter_connect_button = connect_button
@@ -444,4 +498,5 @@ def attach_luxmeter_controls(window):
     window.luxmeter_last_live_timestamp = None
     window.luxmeter_last_live_interval_ms = None
 
+    instrument_changed()
     _update_controls()
