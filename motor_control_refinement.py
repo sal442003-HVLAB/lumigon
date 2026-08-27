@@ -81,16 +81,20 @@ def _write_verified_profile(window, axis, speed_rpm, ramp_ms, scurve_ms):
         ramp_readback,
         scurve_readback,
     )
+    return speed_readback, ramp_readback, scurve_readback
+
+
+def _read_profile(window, axis):
+    return (
+        window.modbus.read_u16(axis.slave_id, P5_60),
+        window.modbus.read_u16(axis.slave_id, P5_20),
+        window.modbus.read_u16(axis.slave_id, P1_36),
+    )
 
 
 def attach_motor_control_refinement(window):
-    """Apply one-degree manual jogs, zero-state UI and automatic drive profiles."""
+    """Apply one-degree jogs, zero-state UI and verified drive profiles."""
 
-    # ------------------------------------------------------------------
-    # Manual jog presentation and confirmation.
-    # Existing button lambdas resolve window.jog_axis at click time, so replacing
-    # the bound method here also fixes the old hard-coded 0.1-degree prompt.
-    # ------------------------------------------------------------------
     for panel in (
         getattr(window, "gamma_panel", None),
         getattr(window, "c_panel", None),
@@ -135,11 +139,7 @@ def attach_motor_control_refinement(window):
 
     window.jog_axis = MethodType(jog_axis_refined, window)
 
-    # ------------------------------------------------------------------
-    # Session Zero: a single stateful button. Amber = not set, green = set.
-    # The old side label remains only as an internal success sentinel and is
-    # hidden from the operator.
-    # ------------------------------------------------------------------
+    # Session Zero: amber while unset, green after a successful two-axis capture.
     zero_button = getattr(window, "zero_button", None)
     zero_label = getattr(window, "zero_info_label", None)
 
@@ -181,7 +181,6 @@ def attach_motor_control_refinement(window):
                 )
                 return
 
-            # A failed re-zero must not leave a partially updated reference.
             window.gamma_zero_puu = old_gamma
             window.c_zero_puu = old_c
             if old_gamma is not None and old_c is not None:
@@ -194,10 +193,7 @@ def attach_motor_control_refinement(window):
     if zero_label is not None:
         zero_label.hide()
 
-    # ------------------------------------------------------------------
-    # Connect wrapper: always write and verify the confirmed default motion
-    # profile on both drives after communication succeeds.
-    # ------------------------------------------------------------------
+    # Connect wrapper: write and verify the confirmed default profile on S1/S2.
     connect_button = getattr(window, "connect_button", None)
     original_connect = window.connect_drives
     if connect_button is not None:
@@ -241,14 +237,33 @@ def attach_motor_control_refinement(window):
                 "5.0 rpm / Ramp 300 ms / S-curve 2000 ms."
             )
 
+            # Reflect the values that were actually verified at connection.
+            for control, value in (
+                (getattr(window, "gamma_speed_spin", None), GAMMA_SPEED_DEFAULT_RPM),
+                (getattr(window, "gamma_ramp_spin", None), GAMMA_RAMP_DEFAULT_MS),
+                (getattr(window, "gamma_scurve_spin", None), GAMMA_SCURVE_DEFAULT_MS),
+                (getattr(window, "c_speed_spin", None), C_SPEED_DEFAULT_RPM),
+                (getattr(window, "c_ramp_spin", None), C_RAMP_DEFAULT_MS),
+                (getattr(window, "c_scurve_spin", None), C_SCURVE_DEFAULT_MS),
+            ):
+                if control is not None:
+                    control.setValue(value)
+
+            for status in (
+                getattr(window, "gamma_profile_status_label", None),
+                getattr(window, "c_profile_status_label", None),
+            ):
+                if status is not None:
+                    status.setText("Verified on Connect — press Enter after edits")
+
         connect_button.clicked.connect(connect_with_default_profiles)
 
-    # Axis-profile widgets are attached immediately after this refinement in
-    # main.py. Hide their manual Apply controls once the event loop starts and
-    # leave the confirmed defaults visible as read-only information.
+    # Axis-profile widgets are created just after this function returns. Keep
+    # them editable, hide Apply, and commit a field only when Enter is pressed.
     def finalize_profile_ui():
         profile_sets = (
             (
+                GAMMA,
                 getattr(window, "gamma_speed_spin", None),
                 getattr(window, "gamma_ramp_spin", None),
                 getattr(window, "gamma_scurve_spin", None),
@@ -259,6 +274,7 @@ def attach_motor_control_refinement(window):
                 GAMMA_SCURVE_DEFAULT_MS,
             ),
             (
+                C_AXIS,
                 getattr(window, "c_speed_spin", None),
                 getattr(window, "c_ramp_spin", None),
                 getattr(window, "c_scurve_spin", None),
@@ -270,24 +286,98 @@ def attach_motor_control_refinement(window):
             ),
         )
 
-        for speed, ramp, scurve, apply_button, status, sv, rv, cv in profile_sets:
-            if speed is not None:
-                speed.setValue(float(sv))
-                speed.setEnabled(False)
-                speed.setToolTip("Applied and verified automatically when drives connect.")
-            if ramp is not None:
-                ramp.setValue(int(rv))
-                ramp.setEnabled(False)
-                ramp.setToolTip("Applied and verified automatically when drives connect.")
-            if scurve is not None:
-                scurve.setValue(int(cv))
-                scurve.setEnabled(False)
-                scurve.setToolTip("Applied and verified automatically when drives connect.")
+        for axis, speed, ramp, scurve, apply_button, status, sv, rv, cv in profile_sets:
             if apply_button is not None:
                 apply_button.hide()
             if status is not None:
-                status.setText("Auto-applied on Connect")
+                status.setText("Defaults applied on Connect — press Enter after edits")
                 status.setStyleSheet("color: #7FB8A4;")
+
+            controls = (
+                (speed, "Speed", P5_60, lambda v: round(float(v) * 10.0), lambda raw: raw / 10.0),
+                (ramp, "Ramp", P5_20, lambda v: int(v), lambda raw: int(raw)),
+                (scurve, "S-curve", P1_36, lambda v: int(v), lambda raw: int(raw)),
+            )
+
+            if speed is not None:
+                speed.setValue(float(sv))
+            if ramp is not None:
+                ramp.setValue(int(rv))
+            if scurve is not None:
+                scurve.setValue(int(cv))
+
+            for control, label, register, encode, decode in controls:
+                if control is None:
+                    continue
+                control.setEnabled(True)
+                control.setToolTip(
+                    f"Edit {label}, then press Enter to write and verify it on the {axis.name} drive."
+                )
+                line_edit = control.lineEdit()
+                if line_edit is None:
+                    continue
+
+                def commit_field(
+                    *,
+                    axis=axis,
+                    control=control,
+                    label=label,
+                    register=register,
+                    encode=encode,
+                    decode=decode,
+                    status=status,
+                ):
+                    if not window.modbus.is_connected:
+                        QMessageBox.warning(
+                            window,
+                            "Not Connected",
+                            f"Connect the drives before changing {axis.name} {label}.",
+                        )
+                        return
+
+                    requested_raw = encode(control.value())
+                    window.timer.stop()
+                    previous_raw = None
+                    try:
+                        previous_raw = window.modbus.read_u16(axis.slave_id, register)
+                        window.modbus.write_u16(axis.slave_id, register, requested_raw)
+                        readback = window.modbus.read_u16(axis.slave_id, register)
+                        if readback != requested_raw:
+                            raise RuntimeError(
+                                f"{axis.name} {label}: readback {decode(readback)} does not "
+                                f"match requested {decode(requested_raw)}."
+                            )
+
+                        speed_raw, ramp_raw, scurve_raw = _read_profile(window, axis)
+                        window.motion.set_expected_profile(
+                            axis,
+                            speed_raw,
+                            ramp_raw,
+                            scurve_raw,
+                        )
+                        control.setValue(decode(readback))
+                        if status is not None:
+                            status.setText(
+                                f"{label} verified: {control.text()} — Enter to commit edits"
+                            )
+                    except Exception as exc:
+                        if previous_raw is not None:
+                            try:
+                                window.modbus.write_u16(axis.slave_id, register, previous_raw)
+                                restored = window.modbus.read_u16(axis.slave_id, register)
+                                if restored == previous_raw:
+                                    control.setValue(decode(previous_raw))
+                            except Exception:
+                                pass
+                        QMessageBox.critical(
+                            window,
+                            f"{axis.name} {label} Error",
+                            str(exc),
+                        )
+                    finally:
+                        window.timer.start()
+
+                line_edit.returnPressed.connect(commit_field)
 
     QTimer.singleShot(0, finalize_profile_ui)
     return zero_button
