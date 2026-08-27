@@ -27,6 +27,7 @@ from grid_validation_ui import attach_grid_validation_ui
 from grid_results_runtime import attach_grid_results_runtime
 from measurement_results_runtime import install_measurement_results_runtime
 from results_workspace import attach_results_workspace
+from results_preload_refinement import attach_results_preload_refinement
 from results_viewport_fix import attach_results_viewport_fix
 from luxmeter_resilience import install_phamp_connect_retry
 from miol_profile_runtime import attach_miol_profile_runtime
@@ -202,6 +203,7 @@ def main():
 
     organize_main_window_tabs(window)
     attach_results_workspace(window)
+    attach_results_preload_refinement(window)
     attach_results_viewport_fix(window)
     attach_grid_results_runtime(window)
     attach_miol_results_runtime(window)
