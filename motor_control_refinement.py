@@ -6,7 +6,7 @@ from machine_config import JOG_STEP_DEG
 
 
 def attach_motor_control_refinement(window):
-    """Apply the confirmed manual jog increment and emphasize Session Zero."""
+    """Apply the confirmed manual jog increment and clarify the zero control."""
 
     for panel in (
         getattr(window, "gamma_panel", None),
@@ -23,9 +23,10 @@ def attach_motor_control_refinement(window):
     zero_label = getattr(window, "zero_info_label", None)
 
     if zero_button is not None:
+        zero_button.setText("Set Zero — Both Axes")
         zero_button.setObjectName("sessionZeroButton")
         zero_button.setToolTip(
-            "Capture the current physical position as Session Zero for both Gamma and C axes."
+            "Set the current physical position as zero for both Gamma and C axes."
         )
         zero_button.setStyleSheet(
             """
@@ -48,14 +49,14 @@ def attach_motor_control_refinement(window):
 
     if zero_label is not None:
         zero_label.setObjectName("sessionZeroStatus")
+        zero_label.setToolTip("Current zero-reference status for both axes.")
         zero_label.setStyleSheet(
             """
             QLabel#sessionZeroStatus {
                 color: #F0C36A;
-                background-color: #241E14;
-                border: 1px solid #705322;
-                border-radius: 5px;
-                padding: 7px 12px;
+                background: transparent;
+                border: none;
+                padding: 7px 4px;
                 font-weight: 600;
             }
             """
