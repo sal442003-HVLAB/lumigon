@@ -1,12 +1,10 @@
 """Profile-driven ICAO obstacle-light workflow for Lumigon Measurement.
 
-Selecting an Aviation / Obstacle Light profile should configure the angular
-scan and acquisition basis instead of merely changing a label.  This module
-keeps those workflow defaults in one place for LIOL, MIOL and HIOL families.
-
-The profile workflow is intentionally separate from family-specific compliance
-analysis.  MIOL compliance already exists; LIOL/HIOL Results checks can be
-added incrementally without changing the profile-selection contract.
+Selecting an Aviation / Obstacle Light profile configures both goniometer axes.
+Lumigon has no separate "C-only" or "Gamma-only" measurement geometry for the
+normal obstacle-light workflow: the default is a C x Gamma grid.  Family-specific
+compliance analysis remains separate so LIOL/HIOL checks can be added without
+changing the profile-selection contract.
 """
 
 from __future__ import annotations
@@ -16,7 +14,11 @@ from typing import Optional
 
 from PySide6.QtWidgets import QFormLayout, QGroupBox, QLabel
 
+from machine_config import C_LIMIT_DEG
 from phamp_mb7 import PhAmpMB7
+
+
+DEFAULT_C_STEP_DEG = 5.0
 
 
 @dataclass(frozen=True)
@@ -31,18 +33,24 @@ class ObstacleProfileWorkflow:
     benchmark: str
     elevation_start_deg: float
     elevation_end_deg: float
-    step_deg: float
+    gamma_step_deg: float
     key_angles: str
     note: str
     flashing: bool
     capture_duration_s: float = 4.2
+    c_start_deg: float = -C_LIMIT_DEG
+    c_end_deg: float = C_LIMIT_DEG
+    c_step_deg: float = DEFAULT_C_STEP_DEG
 
 
 # ICAO elevation is positive upward. Lumigon Gamma positive is downward, so
-# Gamma command = -ICAO elevation.  The selected ranges below are practical
-# characterization ranges that include the tabulated checkpoints/beam-spread
-# region. LIOL's full Annex distribution extends to +90° elevation; with the
-# present Gamma ±60° mechanical envelope that part is necessarily only partial.
+# Gamma command = -ICAO elevation. The Gamma ranges below are profile-driven
+# characterization ranges that contain the relevant tabulated checkpoints.
+#
+# The current Lumigon C envelope is limited to +/-45 deg. Therefore the default
+# C range below is the complete mechanically available Lumigon coverage, NOT a
+# claim of full ICAO 360-degree azimuth compliance. Full-360 compliance remains
+# explicitly Not Evaluated until a suitable fixture/setup provides that coverage.
 OBSTACLE_PROFILE_WORKFLOWS = {
     "LIOL-A": ObstacleProfileWorkflow(
         "LIOL-A", "LIOL", "A", "Table 6-2", "Red", "Fixed",
@@ -68,7 +76,7 @@ OBSTACLE_PROFILE_WORKFLOWS = {
         "≥40 cd between +2° and +10°; ≤400 cd; beam spread ≥12° at ≥20 cd",
         -3.0, 20.0, 0.5,
         "Peak approximately +2.5°; beam threshold 20 cd",
-        "Temporal effective intensity is captured at every stationary angular point.",
+        "Temporal effective intensity is captured at every stationary C/Gamma point.",
         True, 2.2,
     ),
     "LIOL-D": ObstacleProfileWorkflow(
@@ -77,7 +85,7 @@ OBSTACLE_PROFILE_WORKFLOWS = {
         "≥200 cd between +2° and +20°; ≤400 cd",
         -3.0, 30.0, 0.5,
         "Peak approximately +17°",
-        "The wider scan range is used to capture the approximately +17° peak location.",
+        "The wider Gamma scan captures the approximately +17° peak location.",
         True, 2.2,
     ),
     "LIOL-E": ObstacleProfileWorkflow(
@@ -95,7 +103,7 @@ OBSTACLE_PROFILE_WORKFLOWS = {
         "20,000 cd Day/Twilight; 2,000 cd Night",
         -10.0, 10.0, 0.5,
         "0°, −1°, −10°; minimum beam spread 3°",
-        "Stationary temporal capture at every angular point; operating condition selects the benchmark.",
+        "Stationary temporal capture at every C/Gamma point; operating condition selects the benchmark.",
         True, 4.2,
     ),
     "MIOL TYPE B": ObstacleProfileWorkflow(
@@ -104,7 +112,7 @@ OBSTACLE_PROFILE_WORKFLOWS = {
         "2,000 cd Night",
         -10.0, 10.0, 0.5,
         "0°, −1°, −10°; minimum beam spread 3°",
-        "Stationary temporal capture at every angular point.",
+        "Stationary temporal capture at every C/Gamma point.",
         True, 4.2,
     ),
     "MIOL TYPE C": ObstacleProfileWorkflow(
@@ -113,7 +121,7 @@ OBSTACLE_PROFILE_WORKFLOWS = {
         "2,000 cd Night",
         -10.0, 10.0, 0.5,
         "0°, −1°, −10°; minimum beam spread 3°",
-        "Fixed-light photometry; no temporal I-effective capture required.",
+        "Fixed-light photometry on the C × Gamma grid; no temporal I-effective capture required.",
         False,
     ),
     "HIOL-A": ObstacleProfileWorkflow(
@@ -146,7 +154,7 @@ def workflow_from_profile_text(text: str) -> Optional[ObstacleProfileWorkflow]:
 
 
 def attach_obstacle_profile_workflow(window):
-    """Show and apply the selected ICAO obstacle-light profile workflow."""
+    """Show and apply the selected ICAO obstacle-light C x Gamma workflow."""
 
     if getattr(window, "measurement_obstacle_workflow_box", None) is not None:
         return window.measurement_obstacle_workflow_box
@@ -168,11 +176,23 @@ def attach_obstacle_profile_workflow(window):
     signal_label = QLabel("—")
     benchmark_label = QLabel("—")
     basis_label = QLabel("—")
-    scan_label = QLabel("—")
+    scan_mode_label = QLabel("C × Gamma Grid")
+    c_axis_label = QLabel("—")
+    gamma_axis_label = QLabel("—")
+    traversal_value_label = QLabel("Gamma sweep for each C position")
     checkpoints_label = QLabel("—")
+    coverage_label = QLabel("—")
     note_label = QLabel("—")
-    for label in (benchmark_label, scan_label, checkpoints_label, note_label):
+    for label in (
+        benchmark_label,
+        c_axis_label,
+        gamma_axis_label,
+        checkpoints_label,
+        coverage_label,
+        note_label,
+    ):
         label.setWordWrap(True)
+    coverage_label.setStyleSheet("color: #D6A84A;")
     note_label.setStyleSheet("color: #8AA8BC;")
 
     form.addRow("Family / Type:", family_label)
@@ -180,17 +200,20 @@ def attach_obstacle_profile_workflow(window):
     form.addRow("Signal:", signal_label)
     form.addRow("Benchmark / limits:", benchmark_label)
     form.addRow("Intensity basis:", basis_label)
-    form.addRow("Applied angular scan:", scan_label)
+    form.addRow("Scan mode:", scan_mode_label)
+    form.addRow("C axis:", c_axis_label)
+    form.addRow("Gamma axis:", gamma_axis_label)
+    form.addRow("Traversal:", traversal_value_label)
     form.addRow("Key ICAO angles:", checkpoints_label)
+    form.addRow("Coverage:", coverage_label)
     form.addRow("", note_label)
 
     layout = workspace.layout()
-    # Keep this immediately below the Test Definition / Angular Scan / Acquisition
-    # cards. Family-specific MIOL controls may follow it.
     layout.insertWidget(min(2, layout.count()), box)
 
     window.measurement_obstacle_workflow_box = box
-    window.measurement_obstacle_workflow_scan_label = scan_label
+    window.measurement_obstacle_workflow_c_label = c_axis_label
+    window.measurement_obstacle_workflow_gamma_label = gamma_axis_label
 
     syncing = False
 
@@ -215,29 +238,45 @@ def attach_obstacle_profile_workflow(window):
 
         syncing = True
         try:
+            # C x Gamma Grid is the normal Lumigon obstacle-light geometry.
             scan_mode = getattr(window, "measurement_scan_mode_combo", None)
             if scan_mode is not None:
-                scan_mode.setCurrentIndex(0)  # C fixed / Gamma sweep
+                scan_mode.setCurrentIndex(2)
+
+            traversal = getattr(window, "measurement_scan_order_combo", None)
+            if traversal is not None:
+                traversal.setCurrentIndex(0)  # Gamma sweep for each C position
 
             # ICAO elevation = -Gamma.
             gamma_start = -workflow.elevation_end_deg
             gamma_end = -workflow.elevation_start_deg
-            set_value("measurement_c_start", 0.0)
-            set_value("measurement_c_end", 0.0)
+
+            set_value("measurement_c_start", workflow.c_start_deg)
+            set_value("measurement_c_end", workflow.c_end_deg)
+            set_value("measurement_c_step", workflow.c_step_deg)
             set_value("measurement_gamma_start", gamma_start)
             set_value("measurement_gamma_end", gamma_end)
-            set_value("measurement_gamma_step", workflow.step_deg)
+            set_value("measurement_gamma_step", workflow.gamma_step_deg)
 
             family_label.setText(f"{workflow.family} Type {workflow.type_code}")
             distribution_label.setText(f"ICAO Annex 14 • {workflow.distribution_table}")
             signal_label.setText(f"{workflow.colour} • {workflow.signal}")
             benchmark_label.setText(workflow.benchmark)
             basis_label.setText(workflow.intensity_basis)
-            scan_label.setText(
-                f"ICAO elevation {workflow.elevation_start_deg:+g}° → {workflow.elevation_end_deg:+g}° "
-                f"at {workflow.step_deg:g}° steps  •  Lumigon Gamma {gamma_start:+g}° → {gamma_end:+g}°  •  C = 0°"
+            scan_mode_label.setText("C × Gamma Grid")
+            c_axis_label.setText(
+                f"{workflow.c_start_deg:+g}° → {workflow.c_end_deg:+g}°  •  Step {workflow.c_step_deg:g}°"
             )
+            gamma_axis_label.setText(
+                f"{gamma_start:+g}° → {gamma_end:+g}°  •  Step {workflow.gamma_step_deg:g}° "
+                f"(ICAO elevation {workflow.elevation_start_deg:+g}° → {workflow.elevation_end_deg:+g}°)"
+            )
+            traversal_value_label.setText("Gamma sweep for each C position")
             checkpoints_label.setText(workflow.key_angles)
+            coverage_label.setText(
+                f"Lumigon C coverage {workflow.c_start_deg:+g}°…{workflow.c_end_deg:+g}°; "
+                "full ICAO 360° azimuth compliance is not evaluated in this setup."
+            )
             note_label.setText(workflow.note)
 
             # All flashing obstacle-light families use effective intensity.
