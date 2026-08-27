@@ -19,6 +19,7 @@ from execution_mode_controls import attach_execution_mode_controls
 from measurement_ui_fixes import attach_measurement_ui_fixes
 from measurement_scroll_runtime import attach_measurement_scroll_runtime
 from measurement_profile_catalog import attach_measurement_profile_catalog
+from measurement_profile_layout import attach_measurement_profile_layout
 from obstacle_profile_workflow import attach_obstacle_profile_workflow
 from test_plan_workspace import attach_test_plan_workspace
 from test_plan_runtime_improvements import install_test_plan_runtime_improvements
@@ -214,6 +215,7 @@ def main():
     attach_miol_capture_monitor(window)
     attach_measurement_profile_catalog(window)
     attach_obstacle_profile_workflow(window)
+    attach_measurement_profile_layout(window)
     attach_grid_step_runtime(window)
     attach_grid_validation_ui(window)
     attach_measurement_scroll_runtime(window)
