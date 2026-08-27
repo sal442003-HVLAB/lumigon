@@ -3,6 +3,12 @@
 # HMI v0.3.4
 # ============================================================
 
+# TEMPORARY DEVELOPMENT MODE.
+# True  = use virtual goniometer + virtual luxmeter (no hardware I/O).
+# False = use the real RS-485 / RS-232 hardware drivers.
+# IMPORTANT: set this back to False before hardware operation.
+VIRTUAL_HARDWARE = True
+
 PORT = "COM4"
 BAUD_RATE = 38400
 SERIAL_TIMEOUT = 1.0
@@ -32,8 +38,8 @@ PR_CONTROL_WORD = 0x00000042
 # ------------------------------------------------------------
 # Per-axis commissioning motion profiles
 # ------------------------------------------------------------
-# These are HMI defaults only. Opening Lumigon does not write them
-# to either drive; the operator must press Apply for the selected axis.
+# These are HMI defaults. Lumigon writes and verifies them automatically when
+# the drives connect; later edits are committed with Enter and read back.
 
 PROFILE_MIN_MS = 100
 PROFILE_MAX_MS = 3000
