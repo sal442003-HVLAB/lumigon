@@ -58,6 +58,29 @@ def _build_axis_profile_box(window, axis, speed_default, ramp_default, scurve_de
     scurve.setMinimumWidth(110)
 
     apply_button = QPushButton(f"Apply to {axis.name} Axis")
+    apply_button.setObjectName("motionProfileApplyButton")
+    apply_button.setToolTip(
+        f"Write the selected Speed, Ramp and S-curve settings to the {axis.name} servo drive."
+    )
+    apply_button.setStyleSheet(
+        """
+        QPushButton#motionProfileApplyButton {
+            background-color: #167C80;
+            color: #F3FFFF;
+            border: 1px solid #27A3A8;
+            border-radius: 6px;
+            padding: 8px 18px;
+            font-weight: 700;
+        }
+        QPushButton#motionProfileApplyButton:hover {
+            background-color: #1C959A;
+        }
+        QPushButton#motionProfileApplyButton:pressed {
+            background-color: #116468;
+        }
+        """
+    )
+
     status = QLabel("Not applied in this session")
     status.setWordWrap(True)
 
