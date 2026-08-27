@@ -64,7 +64,8 @@ C_SPEED_MIN_RPM = SPEED_MIN_RPM
 C_SPEED_MAX_RPM = SPEED_MAX_RPM
 C_SPEED_STEP_RPM = SPEED_STEP_RPM
 
-JOG_STEP_DEG = 0.1
+# Manual Motor Control jog increment.
+JOG_STEP_DEG = 1.0
 
 # ------------------------------------------------------------
 # Confirmed software motion envelopes around Session Zero
