@@ -8,6 +8,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox
 
 from machine_config import (
+    VIRTUAL_HARDWARE,
     JOG_STEP_DEG,
     P1_36,
     P5_20,
@@ -20,6 +21,11 @@ from machine_config import (
     C_SCURVE_DEFAULT_MS,
 )
 from motion_controller import GAMMA, C_AXIS
+from virtual_hardware import install_virtual_hardware
+
+# This call is a no-op when VIRTUAL_HARDWARE is False. It runs at import time,
+# before MainWindow constructs the real driver objects.
+install_virtual_hardware()
 
 
 ZERO_PENDING_STYLE = """
@@ -94,6 +100,13 @@ def _read_profile(window, axis):
 
 def attach_motor_control_refinement(window):
     """Apply one-degree jogs, zero-state UI and verified drive profiles."""
+
+    if VIRTUAL_HARDWARE:
+        window.setWindowTitle(window.windowTitle() + " — VIRTUAL HARDWARE")
+        window.connection_label.setText("● VIRTUAL — Disconnected")
+        window.connection_label.setToolTip(
+            "VIRTUAL HARDWARE mode is active. No RS-485/RS-232 hardware I/O is performed."
+        )
 
     for panel in (
         getattr(window, "gamma_panel", None),
@@ -232,12 +245,14 @@ def attach_motor_control_refinement(window):
                 )
                 return
 
+            if VIRTUAL_HARDWARE:
+                window.connection_label.setText("● VIRTUAL — Connected")
             window.connection_label.setToolTip(
-                "Connected. Default motion profile verified on both axes: "
+                ("VIRTUAL HARDWARE. " if VIRTUAL_HARDWARE else "")
+                + "Connected. Default motion profile verified on both axes: "
                 "5.0 rpm / Ramp 300 ms / S-curve 2000 ms."
             )
 
-            # Reflect the values that were actually verified at connection.
             for control, value in (
                 (getattr(window, "gamma_speed_spin", None), GAMMA_SPEED_DEFAULT_RPM),
                 (getattr(window, "gamma_ramp_spin", None), GAMMA_RAMP_DEFAULT_MS),
@@ -258,8 +273,6 @@ def attach_motor_control_refinement(window):
 
         connect_button.clicked.connect(connect_with_default_profiles)
 
-    # Axis-profile widgets are created just after this function returns. Keep
-    # them editable, hide Apply, and commit a field only when Enter is pressed.
     def finalize_profile_ui():
         profile_sets = (
             (
