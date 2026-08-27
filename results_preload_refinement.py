@@ -10,6 +10,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout
 
 
+PRELOAD_PANEL_HEIGHT = 300
+
+
 def attach_results_preload_refinement(window):
     workspace = getattr(window, "results_workspace_controller", None)
     if workspace is None:
@@ -28,15 +31,18 @@ def attach_results_preload_refinement(window):
 
     panel = QFrame(workspace)
     panel.setObjectName("resultsPreloadPanel")
-    panel.setMinimumHeight(210)
-    panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+    # Keep the empty-state visually compact. It must not consume the full Results
+    # viewport simply because all run-dependent widgets are hidden.
+    panel.setFixedHeight(PRELOAD_PANEL_HEIGHT)
+    panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
     panel_layout = QVBoxLayout(panel)
-    panel_layout.setContentsMargins(24, 22, 24, 22)
-    panel_layout.setSpacing(8)
+    panel_layout.setContentsMargins(30, 28, 30, 26)
+    panel_layout.setSpacing(10)
 
     title = QLabel("No Results Loaded")
     title.setObjectName("resultsPreloadTitle")
+    title.setAlignment(Qt.AlignCenter)
 
     description = QLabel(
         "Complete a Lumigon measurement run or reopen a saved measurement CSV. "
@@ -44,6 +50,7 @@ def attach_results_preload_refinement(window):
     )
     description.setObjectName("resultsPreloadDescription")
     description.setWordWrap(True)
+    description.setAlignment(Qt.AlignCenter)
     description.setMinimumWidth(0)
     description.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
@@ -52,6 +59,10 @@ def attach_results_preload_refinement(window):
     )
     hint.setObjectName("resultsPreloadHint")
     hint.setWordWrap(True)
+    hint.setAlignment(Qt.AlignCenter)
+    hint.setMinimumHeight(24)
+    hint.setMinimumWidth(0)
+    hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
     actions = QHBoxLayout()
     actions.setSpacing(8)
@@ -67,15 +78,16 @@ def attach_results_preload_refinement(window):
     actions.addStretch(1)
 
     panel_layout.addStretch(1)
-    panel_layout.addWidget(title, 0, Qt.AlignHCenter)
+    panel_layout.addWidget(title)
     panel_layout.addWidget(description)
     panel_layout.addSpacing(4)
     panel_layout.addLayout(actions)
-    panel_layout.addWidget(hint, 0, Qt.AlignHCenter)
+    panel_layout.addWidget(hint)
     panel_layout.addStretch(1)
 
-    # Header remains fixed at item 0. Put the landing card directly below it.
-    root.insertWidget(1, panel)
+    # Header remains fixed at item 0. Put the compact landing card directly
+    # below it and leave the unused Results area below the card empty.
+    root.insertWidget(1, panel, 0, Qt.AlignTop)
 
     workspace.setStyleSheet(
         workspace.styleSheet()
