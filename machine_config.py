@@ -6,8 +6,8 @@
 # TEMPORARY DEVELOPMENT MODE.
 # True  = use virtual goniometer + virtual luxmeter (no hardware I/O).
 # False = use the real RS-485 / RS-232 hardware drivers.
-# IMPORTANT: set this back to False before hardware operation.
-VIRTUAL_HARDWARE = True
+# IMPORTANT: keep this False for hardware operation.
+VIRTUAL_HARDWARE = False
 
 PORT = "COM4"
 BAUD_RATE = 38400
