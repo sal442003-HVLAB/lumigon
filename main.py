@@ -15,6 +15,7 @@ from main_window import MainWindow
 from axis_profile_controls import attach_axis_profile_controls
 from motor_control_refinement import attach_motor_control_refinement
 from luxmeter_controls import attach_luxmeter_controls
+from effective_intensity_test import attach_effective_intensity_test
 from tabbed_layout import organize_main_window_tabs
 from execution_mode_controls import attach_execution_mode_controls
 from measurement_ui_fixes import attach_measurement_ui_fixes
@@ -199,6 +200,7 @@ def main():
     attach_motor_control_refinement(window)
     attach_axis_profile_controls(window)
     attach_luxmeter_controls(window)
+    attach_effective_intensity_test(window)
 
     notice = window.findChild(QLabel, "readOnlyNotice")
     if notice is not None:
