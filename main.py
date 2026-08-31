@@ -53,11 +53,7 @@ POPUP_MAX_HEIGHT = 520
 
 
 def _find_popup_image():
-    """Return the startup popup image path if present.
-
-    The project may use either `asset` or `assets`. The preferred base filename
-    is `popup`; common image extensions are accepted too.
-    """
+    """Return the optional startup popup image path if present."""
 
     project_dir = Path(__file__).resolve().parent
     candidates = []
@@ -83,11 +79,7 @@ def _find_popup_image():
 
 
 def _show_startup_popup(popup_path):
-    """Show the startup popup using the same sizing as Lumisphere.
-
-    Lumisphere scales its popup into a 900 x 520 bounding box while preserving
-    the image aspect ratio, then sizes the splash dialog to the rendered image.
-    """
+    """Show the startup popup using the same sizing as Lumisphere."""
 
     if popup_path is None:
         return
@@ -177,17 +169,10 @@ def _apply_confirmed_axis_limits(window):
 
 
 def main():
-    app = QApplication(
-        sys.argv
-    )
+    app = QApplication(sys.argv)
 
-    app.setApplicationName(
-        APP_NAME
-    )
-
-    app.setApplicationVersion(
-        APP_VERSION
-    )
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(APP_VERSION)
 
     install_phamp_connect_retry()
     install_test_plan_runtime_improvements()
@@ -200,7 +185,6 @@ def main():
     attach_motor_control_refinement(window)
     attach_axis_profile_controls(window)
     attach_luxmeter_controls(window)
-    attach_effective_intensity_test(window)
 
     notice = window.findChild(QLabel, "readOnlyNotice")
     if notice is not None:
@@ -210,7 +194,13 @@ def main():
             "Continuous bounded moves enabled."
         )
 
+    # First split the original controls into their functional tabs.  The
+    # standalone effective-intensity panel must be attached AFTER this step so
+    # it is parented directly to the Luxmeter tab rather than the old root
+    # layout (which is subsequently classified into Motor Control).
     organize_main_window_tabs(window)
+    attach_effective_intensity_test(window)
+
     attach_results_workspace(window)
     attach_results_preload_refinement(window)
     attach_results_viewport_fix(window)
@@ -228,12 +218,6 @@ def main():
     attach_grid_validation_ui(window)
     attach_measurement_scroll_runtime(window)
 
-    # Pause/Abort are intentionally unconnected until a run starts in the old
-    # Measurement implementation. The detached Test Plan workspace takes over
-    # those buttons at startup, and PySide emits a RuntimeWarning when its
-    # defensive disconnect() finds no previous slot. This warning is harmless;
-    # suppress only that specific libpyside message while the workspace is
-    # attached so real RuntimeWarnings remain visible.
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
@@ -246,15 +230,11 @@ def main():
     if screen is not None:
         window.setGeometry(screen.availableGeometry())
 
-    _show_startup_popup(
-        _find_popup_image()
-    )
+    _show_startup_popup(_find_popup_image())
 
     window.showMaximized()
 
-    sys.exit(
-        app.exec()
-    )
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
