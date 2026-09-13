@@ -167,7 +167,6 @@ class P9710:
             raise ValueError("CW integration time must be between 0.1 ms and 6000 ms.")
         self.command("SB0")
         self.command(f"SR{int(range_id)}")
-        # SN uses 0.1 ms units: SN1000 = 100 ms.
         self.command(f"SN{int(round(float(integration_ms) * 10.0))}")
         self.command("SS1" if sync_enabled else "SS0")
 
@@ -215,12 +214,36 @@ class P9710:
         self.command(f"SM{int(window_ms)}")
         self.command("SZ0")
 
-    def detect_reference_flash(self, threshold_lx: float = 5.0) -> tuple[float, float]:
+    def detect_reference_flash(
+        self,
+        threshold_lx: float = 5.0,
+        timeout_s: float | None = None,
+    ) -> tuple[float, float]:
+        threshold_lx = float(threshold_lx)
+        if threshold_lx <= 0.0:
+            raise ValueError("Flash trigger threshold must be positive.")
+
+        deadline = None
+        if timeout_s is not None:
+            timeout_s = float(timeout_s)
+            if timeout_s <= 0.0:
+                raise ValueError("Flash trigger timeout must be positive.")
+            deadline = time.perf_counter() + timeout_s
+
         previous_value = 0.0
         previous_t = None
+        last_value = None
 
         while True:
+            if deadline is not None and time.perf_counter() >= deadline:
+                detail = "" if last_value is None else f" Last MV={last_value:.4f} lx."
+                raise P9710Error(
+                    f"No reference flash crossed {threshold_lx:g} lx within {timeout_s:g} s."
+                    f"{detail} Check trigger threshold, P-9710 range, or beam level at this angle."
+                )
+
             value, _raw, t1, t2 = self.read_mv()
+            last_value = value
             t_mid = (t1 + t2) / 2.0
 
             if previous_value < threshold_lx <= value:
@@ -248,6 +271,7 @@ class P9710:
         threshold_lx: float = 5.0,
         range_id: int = 5,
         c_s: float = 0.2,
+        trigger_timeout_s: float | None = None,
     ) -> P9710EffectiveReading:
         if period_s <= 0:
             raise ValueError("Pulse period must be positive.")
@@ -257,7 +281,10 @@ class P9710:
             raise ValueError("MI window must be positive.")
 
         self.configure_flash_detection(range_id=range_id)
-        t_ref, trigger_sample = self.detect_reference_flash(threshold_lx=threshold_lx)
+        t_ref, trigger_sample = self.detect_reference_flash(
+            threshold_lx=threshold_lx,
+            timeout_s=trigger_timeout_s,
+        )
 
         self.configure_effective(window_ms=window_ms, c_s=c_s, range_id=range_id)
 
