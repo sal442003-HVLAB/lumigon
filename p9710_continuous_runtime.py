@@ -9,7 +9,7 @@ synchronisation path used by the single-shot buttons.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -134,12 +134,12 @@ def attach_p9710_continuous_runtime(window):
             layout.addWidget(continuous_row)
 
         timer = QTimer(page)
-        timer.setTimerType(QTimer.CoarseTimer)
+        timer.setTimerType(Qt.TimerType.CoarseTimer)
 
         def make_tick(button):
             def tick():
                 # The mode workspace disables the read button while its QThread
-                # is active.  Respect that state so serial transactions can never
+                # is active. Respect that state so serial transactions can never
                 # overlap.
                 if button.isEnabled():
                     button.click()
