@@ -50,7 +50,7 @@ _NUMBER_RE = re.compile(r"[-+]?\d*\.?\d+(?:[Ee][-+]?\d+)?")
 def parse_numeric_reply(raw: str) -> float:
     text = (raw or "").strip()
     # P-9710 status/error replies such as ?16 (overload) and ?32 (underload)
-    # are not measurements.  Never let the numeric error code become a fake
+    # are not measurements. Never let the numeric error code become a fake
     # Lux/current value.
     if text.startswith("?"):
         raise P9710Error(f"P-9710 returned status/error reply: {text}")
@@ -159,11 +159,44 @@ class P9710:
         finally:
             ser.timeout = old_timeout
 
-    def read_mv(self) -> tuple[float, str, float, float]:
-        t1 = time.perf_counter()
-        raw = self.query("MV", wait_s=0.005)
-        t2 = time.perf_counter()
-        return parse_numeric_reply(raw), raw, t1, t2
+    def read_mv(
+        self,
+        *,
+        attempts: int = 3,
+        retry_delay_s: float = 0.03,
+    ) -> tuple[float, str, float, float]:
+        """Read one MV sample with short transport-level retries.
+
+        The laboratory P-9710 occasionally misses a single MV reply on the
+        USB-RS232 path even though the following query succeeds. A missed frame
+        must not abort a long angular scan. Only missing/transport replies are
+        retried; a real P-9710 status reply such as ?16 or ?32 is returned to the
+        parser and remains a hard measurement error.
+        """
+
+        attempts = max(1, int(attempts))
+        last_exc = None
+        for attempt in range(1, attempts + 1):
+            t1 = time.perf_counter()
+            try:
+                raw = self.query("MV", wait_s=0.005)
+            except (P9710Error, serial.SerialException, OSError) as exc:
+                last_exc = exc
+                if attempt >= attempts:
+                    raise P9710Error(
+                        f"No reliable response to 'MV' after {attempts} attempts. "
+                        f"Last error: {exc}"
+                    ) from exc
+                time.sleep(max(0.0, float(retry_delay_s)))
+                continue
+
+            t2 = time.perf_counter()
+            # Do not retry a genuine P-9710 status/error reply. The parser will
+            # raise immediately so range/overload problems remain visible.
+            value = parse_numeric_reply(raw)
+            return value, raw, t1, t2
+
+        raise P9710Error(f"MV read failed: {last_exc}")
 
     def read_range_utilization(self) -> float:
         return parse_numeric_reply(self.query("GP", wait_s=0.005))
@@ -212,6 +245,10 @@ class P9710:
         self.command("SB0")
         self.command(f"SR{int(range_id)}")
         self.command("SN1")
+        # Give the instrument a short, deterministic settling interval before
+        # the first MV trigger-detection query. This prevents the first poll from
+        # colliding with the just-applied range/integration configuration.
+        time.sleep(0.05)
 
     def configure_effective(self, window_ms: int, c_s: float = 0.2, range_id: int = 5):
         self.command("SB0")
