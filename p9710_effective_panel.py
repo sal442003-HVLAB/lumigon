@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QLabel,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSpinBox,
 )
@@ -33,6 +34,10 @@ DEFAULT_WINDOW_MS = 600
 DEFAULT_RANGE = 5
 DEFAULT_THRESHOLD_LX = 5.0
 DEFAULT_C_S = 0.2
+
+# Desired operating region for the P-9710 selected range.
+RANGE_UTILIZATION_MIN_PCT = 15.0
+RANGE_UTILIZATION_MAX_PCT = 85.0
 
 
 def auto_pretrigger_ms(_pulse_ms: int) -> int:
@@ -152,14 +157,38 @@ def attach_p9710_effective_panel(window):
     i_label = QLabel("I-effective: —")
     trigger_label = QLabel("Trigger sample: —")
     timing_label = QLabel("Timing: —")
-    utilization_label = QLabel("Range utilization (GP): —")
-    utilization_label.setStyleSheet("font-weight:700; color:#8FA9B9;")
+
     selected_range_label = QLabel(f"Selected range: R{DEFAULT_RANGE}")
     selected_range_label.setStyleSheet("color:#8FA9B9;")
 
+    utilization_label = QLabel(
+        f"Range utilization (GP) — desired {RANGE_UTILIZATION_MIN_PCT:.0f}–{RANGE_UTILIZATION_MAX_PCT:.0f}%"
+    )
+    utilization_label.setStyleSheet("font-weight:700; color:#8FA9B9;")
+
+    utilization_bar = QProgressBar()
+    utilization_bar.setRange(0, 100)
+    utilization_bar.setValue(0)
+    utilization_bar.setTextVisible(True)
+    utilization_bar.setFormat("—")
+    utilization_bar.setMinimumHeight(24)
+    utilization_bar.setStyleSheet(
+        "QProgressBar {"
+        "  border: 1px solid #34495E;"
+        "  border-radius: 4px;"
+        "  background: #14212B;"
+        "  color: #D7E1E8;"
+        "  text-align: center;"
+        "}"
+        "QProgressBar::chunk {"
+        "  background: #607D8B;"
+        "  border-radius: 3px;"
+        "}"
+    )
+
     note = QLabel(
         "One-step synchronization: detect one real flash with MV, predict only the next flash, "
-        "then start P-9710 MI before it. Range utilization is read from the instrument GP diagnostic."
+        "then start P-9710 MI before it. Range utilization below 15% or above 85% is flagged red."
     )
     note.setWordWrap(True)
     note.setStyleSheet("color:#7892A3;")
@@ -198,8 +227,9 @@ def attach_p9710_effective_panel(window):
     layout.addWidget(timing_label, 4, 5)
 
     layout.addWidget(selected_range_label, 5, 0, 1, 2)
-    layout.addWidget(utilization_label, 5, 2, 1, 2)
-    layout.addWidget(note, 6, 0, 1, 6)
+    layout.addWidget(utilization_label, 5, 2, 1, 4)
+    layout.addWidget(utilization_bar, 6, 0, 1, 6)
+    layout.addWidget(note, 7, 0, 1, 6)
 
     meter_holder = {"meter": None}
 
@@ -213,6 +243,32 @@ def attach_p9710_effective_panel(window):
 
     def update_range_caption():
         selected_range_label.setText(f"Selected range: R{range_spin.value()}")
+
+    def set_utilization_bar(value_pct):
+        if value_pct is None:
+            utilization_bar.setValue(0)
+            utilization_bar.setFormat("Unavailable")
+            utilization_bar.setStyleSheet(
+                "QProgressBar { border:1px solid #34495E; border-radius:4px; background:#14212B; "
+                "color:#D7E1E8; text-align:center; }"
+                "QProgressBar::chunk { background:#607D8B; border-radius:3px; }"
+            )
+            return
+
+        value_pct = max(0.0, min(100.0, float(value_pct)))
+        utilization_bar.setValue(int(round(value_pct)))
+        utilization_bar.setFormat(f"{value_pct:.1f}%")
+
+        outside = (
+            value_pct < RANGE_UTILIZATION_MIN_PCT
+            or value_pct > RANGE_UTILIZATION_MAX_PCT
+        )
+        chunk_color = "#D9534F" if outside else "#2EAD67"
+        utilization_bar.setStyleSheet(
+            "QProgressBar { border:1px solid #34495E; border-radius:4px; background:#14212B; "
+            "color:#FFFFFF; text-align:center; font-weight:700; }"
+            f"QProgressBar::chunk {{ background:{chunk_color}; border-radius:3px; }}"
+        )
 
     def set_busy(busy: bool):
         for control in (
@@ -253,8 +309,11 @@ def attach_p9710_effective_panel(window):
         meter_holder["meter"] = None
         status.setText("Disconnected")
         status.setStyleSheet("color:#8FA9B9;")
-        utilization_label.setText("Range utilization (GP): —")
+        utilization_label.setText(
+            f"Range utilization (GP) — desired {RANGE_UTILIZATION_MIN_PCT:.0f}–{RANGE_UTILIZATION_MAX_PCT:.0f}%"
+        )
         utilization_label.setStyleSheet("font-weight:700; color:#8FA9B9;")
+        set_utilization_bar(None)
 
     def start_measurement():
         meter = meter_holder["meter"]
@@ -274,14 +333,17 @@ def attach_p9710_effective_panel(window):
 
         status.setText("Waiting for reference flash, then measuring next flash…")
         status.setStyleSheet("color:#40B9D0; font-weight:600;")
-        utilization_label.setText(f"Range utilization (GP): measuring on R{range_spin.value()}…")
+        utilization_label.setText(f"Range utilization (GP) — measuring on R{range_spin.value()}…")
         utilization_label.setStyleSheet("font-weight:700; color:#40B9D0;")
+        utilization_bar.setRange(0, 0)
+        utilization_bar.setFormat("Measuring…")
         set_busy(True)
 
         worker = P9710MeasureWorker(meter, settings, parent=window)
         window.p9710_effective_worker = worker
 
         def completed(reading):
+            utilization_bar.setRange(0, 100)
             distance_m = distance_spin.value()
             i_effective_cd = reading.e_effective_lx * distance_m * distance_m
             e_label.setText(f"E-effective: {reading.e_effective_lx:.4f} lx")
@@ -293,11 +355,19 @@ def attach_p9710_effective_panel(window):
             if reading.range_utilization_pct is None:
                 utilization_label.setText("Range utilization (GP): unavailable")
                 utilization_label.setStyleSheet("font-weight:700; color:#E7C76A;")
+                set_utilization_bar(None)
             else:
+                gp = float(reading.range_utilization_pct)
+                outside = gp < RANGE_UTILIZATION_MIN_PCT or gp > RANGE_UTILIZATION_MAX_PCT
                 utilization_label.setText(
-                    f"Range utilization (GP): {reading.range_utilization_pct:.1f}%  |  R{reading.range_id}"
+                    f"Range utilization (GP): {gp:.1f}%  |  R{reading.range_id}  |  "
+                    f"Target {RANGE_UTILIZATION_MIN_PCT:.0f}–{RANGE_UTILIZATION_MAX_PCT:.0f}%"
                 )
-                utilization_label.setStyleSheet("font-weight:700; color:#55EFC4;")
+                utilization_label.setStyleSheet(
+                    "font-weight:700; color:#FF7675;" if outside
+                    else "font-weight:700; color:#55EFC4;"
+                )
+                set_utilization_bar(gp)
 
             status.setText(f"Complete — software start error {reading.software_start_error_ms:+.2f} ms")
             status.setStyleSheet("color:#55EFC4;")
@@ -308,10 +378,12 @@ def attach_p9710_effective_panel(window):
             window.p9710_last_reading = reading
 
         def failed(message):
+            utilization_bar.setRange(0, 100)
             status.setText("Measurement failed")
             status.setStyleSheet("color:#FF7675; font-weight:600;")
             utilization_label.setText("Range utilization (GP): measurement failed")
             utilization_label.setStyleSheet("font-weight:700; color:#FF7675;")
+            set_utilization_bar(None)
             QMessageBox.critical(window, "P-9710 Synchronized Measurement", message)
 
         def finished():
@@ -337,6 +409,7 @@ def attach_p9710_effective_panel(window):
 
     apply_auto_values()
     update_range_caption()
+    set_utilization_bar(None)
     measure_button.setEnabled(False)
 
     insert_index = parent_layout.indexOf(getattr(window, "luxmeter_effective_box", lux_box))
@@ -350,6 +423,7 @@ def attach_p9710_effective_panel(window):
     window.p9710_effective_window_spin = window_spin
     window.p9710_effective_auto_pre = auto_pre
     window.p9710_effective_auto_window = auto_window
+    window.p9710_range_utilization_bar = utilization_bar
     window.p9710_effective_worker = None
     window.p9710_last_e_effective_lx = None
     window.p9710_last_i_effective_cd = None
