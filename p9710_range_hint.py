@@ -1,10 +1,11 @@
-"""Approximate lux-capacity hint for the P-9710 range selector.
+"""Approximate lux-capacity helpers for the P-9710 range selector.
 
 The P-9710 electrical ranges are defined by detector current. For the
-currently characterised lux detector (~0.376 nA/lx), this helper presents the
-approximate illuminance corresponding to full-scale current for each range.
-It is a convenience hint only; GP remains the authoritative live utilization
-indicator.
+currently characterised lux detector (~0.376 nA/lx), this module converts the
+nominal electrical full-scale values to approximate illuminance ranges.
+
+These lux values are convenience hints only. GP remains the authoritative live
+utilization indicator.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ RANGE_MAX_CURRENT_NA = {
 }
 
 
-def _format_lux(value: float) -> str:
+def format_lux(value: float) -> str:
     if value >= 1_000_000:
         return f"{value / 1_000_000:.2f} Mlx"
     if value >= 1_000:
@@ -35,6 +36,28 @@ def _format_lux(value: float) -> str:
     if value >= 10:
         return f"{value:.1f} lx"
     return f"{value:.3f} lx"
+
+
+def range_full_scale_lux(range_id: int) -> float:
+    return RANGE_MAX_CURRENT_NA[int(range_id)] / DETECTOR_SENSITIVITY_NA_PER_LX
+
+
+def range_nominal_span_lux(range_id: int) -> tuple[float, float]:
+    """Return an approximate nominal lux span for a manual range.
+
+    The lower bound is taken as the full-scale value of the next more-sensitive
+    range, giving the operator a practical decade-to-decade span. R7 has no
+    more-sensitive hardware range, so its lower bound is shown as zero.
+    """
+    range_id = int(range_id)
+    upper = range_full_scale_lux(range_id)
+    lower = 0.0 if range_id >= 7 else range_full_scale_lux(range_id + 1)
+    return lower, upper
+
+
+def range_span_text(range_id: int) -> str:
+    lower, upper = range_nominal_span_lux(range_id)
+    return f"{format_lux(lower)} – {format_lux(upper)}"
 
 
 def attach_p9710_range_hint(window):
@@ -52,34 +75,29 @@ def attach_p9710_range_hint(window):
     if range_spin is None:
         return None
 
-    # Reuse the existing Selected range label instead of adding another widget
-    # into the settings grid. This keeps the compact layout intact and avoids
-    # overlapping Trigger threshold / Schmidt-Clausen controls.
-    selected_range_label = None
+    selected_label = None
     for label in box.findChildren(QLabel):
         if label.text().startswith("Selected range:"):
-            selected_range_label = label
+            selected_label = label
             break
 
-    if selected_range_label is None:
+    if selected_label is None:
         return None
 
-    selected_range_label.setToolTip(
-        "Approximate full-scale illuminance calculated from the characterised "
-        "detector sensitivity (~0.376 nA/lx). Use GP for actual range utilization."
+    selected_label.setToolTip(
+        "Approximate illuminance span inferred from the characterised detector "
+        "sensitivity (~0.376 nA/lx). Use GP for actual range utilization."
     )
 
     def update_hint(*_args):
         range_id = int(range_spin.value())
-        current_na = RANGE_MAX_CURRENT_NA[range_id]
-        max_lux = current_na / DETECTOR_SENSITIVITY_NA_PER_LX
-        selected_range_label.setText(
-            f"Selected range: R{range_id}  •  approx. full scale {_format_lux(max_lux)}"
+        selected_label.setText(
+            f"Selected range: R{range_id}  •  approx. {range_span_text(range_id)}"
         )
 
     range_spin.valueChanged.connect(update_hint)
     update_hint()
 
     window.p9710_effective_range_spin = range_spin
-    window.p9710_range_hint_label = selected_range_label
-    return selected_range_label
+    window.p9710_range_hint_label = selected_label
+    return selected_label
