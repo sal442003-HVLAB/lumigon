@@ -222,8 +222,6 @@ class P9710MIOLGridWorker(QThread):
                         f"Point {index}/{total}: C {c_deg:+.2f}°, Gamma {gamma_deg:+.2f}°"
                     )
 
-                    # Sequential axis moves preserve the existing motion controller's
-                    # own limits/interlocks. No direct servo bypass is used here.
                     self._move_if_needed(C_AXIS, c_deg)
                     if self.isInterruptionRequested():
                         self.aborted.emit("Stopped after C-axis move. Partial CSV was preserved.")
@@ -262,8 +260,6 @@ class P9710MIOLGridWorker(QThread):
                     handle.flush()
                     self.point_result.emit(row)
 
-            # Normal completion only: return both axes to Session Home.  Abort/error
-            # deliberately leaves the machine where it stopped for operator review.
             self.progress.emit("Measurement complete — returning C to Home…")
             self.motion.return_to_zero(C_AXIS)
             self.progress.emit("Returning Gamma to Home…")
@@ -366,13 +362,13 @@ def attach_p9710_miol_grid_runtime(window):
     root.addWidget(start_button)
     root.addWidget(stop_button)
 
-    # Place immediately below the ICAO profile box when possible.
     layout = workspace.layout()
     miol_box = getattr(window, "measurement_miol_profile_box", None)
     insert_at = layout.indexOf(miol_box) + 1 if miol_box is not None else 2
     layout.insertWidget(max(0, insert_at), box)
 
     worker_holder = {"worker": None}
+    polling_state = {"main_timer_was_active": False}
 
     def apply_defaults():
         profile = getattr(window, "measurement_profile_combo", None)
@@ -383,7 +379,7 @@ def attach_p9710_miol_grid_runtime(window):
 
         scan = getattr(window, "measurement_scan_mode_combo", None)
         if scan is not None:
-            scan.setCurrentIndex(2)  # C x Gamma Grid
+            scan.setCurrentIndex(2)
         window.measurement_c_start.setValue(max(-C_LIMIT_DEG, DEFAULT_C_START_DEG))
         window.measurement_c_end.setValue(min(C_LIMIT_DEG, DEFAULT_C_END_DEG))
         window.measurement_c_step.setValue(DEFAULT_C_STEP_DEG)
@@ -392,7 +388,7 @@ def attach_p9710_miol_grid_runtime(window):
         window.measurement_gamma_step.setValue(DEFAULT_GAMMA_STEP_DEG)
         order = getattr(window, "measurement_scan_order_combo", None)
         if order is not None:
-            order.setCurrentIndex(0)  # Gamma sweep for each C
+            order.setCurrentIndex(0)
         build = getattr(window, "measurement_build_plan_button", None)
         if build is not None:
             build.click()
@@ -448,6 +444,20 @@ def attach_p9710_miol_grid_runtime(window):
         start_button.setEnabled(True)
         stop_button.setEnabled(False)
 
+        # The main HMI timer polls servo feedback. It must be suspended while
+        # this worker owns the shared Modbus RTU bus, otherwise two threads can
+        # interleave requests and produce truncated frames (for example 2/9 bytes).
+        timer = getattr(window, "timer", None)
+        modbus = getattr(window, "modbus", None)
+        if (
+            polling_state["main_timer_was_active"]
+            and timer is not None
+            and modbus is not None
+            and modbus.is_connected
+        ):
+            timer.start()
+        polling_state["main_timer_was_active"] = False
+
     def start():
         problem = prerequisites()
         if problem:
@@ -484,6 +494,13 @@ def attach_p9710_miol_grid_runtime(window):
         stop_continuous = getattr(window, "p9710_stop_continuous", None)
         if callable(stop_continuous):
             stop_continuous()
+
+        # Suspend normal HMI servo polling before starting the worker. The grid
+        # worker performs its own position reads/moves over the same Modbus bus.
+        timer = getattr(window, "timer", None)
+        polling_state["main_timer_was_active"] = bool(timer is not None and timer.isActive())
+        if polling_state["main_timer_was_active"]:
+            timer.stop()
 
         sample_id = getattr(window, "measurement_sample_id_edit", None)
         sample_text = "sample" if sample_id is None else (sample_id.text().strip() or "sample")
