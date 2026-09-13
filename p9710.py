@@ -24,6 +24,7 @@ class P9710Error(RuntimeError):
 class P9710EffectiveReading:
     e_effective_lx: float
     trigger_sample_lx: float
+    range_utilization_pct: float | None
     pretrigger_ms: int
     window_ms: int
     period_s: float
@@ -69,18 +70,9 @@ class P9710:
         )
 
     def connect(self, attempts: int = 3, retry_delay_s: float = 0.25) -> str:
-        """Connect and identify the meter.
-
-        Some USB-RS232 drivers on Windows occasionally fail their first
-        SetCommState/configuration call with WinError 31 even though the port and
-        instrument are healthy.  The standalone laboratory script proved COM7
-        works with these exact settings, so retry the complete open/configure
-        transaction a few times before reporting a real connection failure.
-        """
         self.disconnect()
         self.version = None
         self.unit = None
-
         attempts = max(1, int(attempts))
         last_exc = None
 
@@ -89,12 +81,9 @@ class P9710:
                 self._open_serial_once()
                 self.version = self.query("GI")
                 self.unit = self.query("GU")
-
                 if not self.version:
                     raise P9710Error("P-9710 did not return a firmware identification.")
-
                 return self.version
-
             except Exception as exc:
                 last_exc = exc
                 self.disconnect()
@@ -138,7 +127,6 @@ class P9710:
         return raw
 
     def command(self, command: str, wait_s: float = 0.02):
-        """Send a setting command. P-9710 setting commands may return an empty line."""
         if not self.is_connected:
             raise P9710Error("P-9710 is not connected.")
         ser = self.serial
@@ -147,7 +135,6 @@ class P9710:
         ser.flush()
         if wait_s > 0:
             time.sleep(wait_s)
-        # Drain an optional acknowledgement without requiring one.
         old_timeout = ser.timeout
         ser.timeout = 0.05
         try:
@@ -161,10 +148,14 @@ class P9710:
         t2 = time.perf_counter()
         return parse_numeric_reply(raw), raw, t1, t2
 
+    def read_range_utilization(self) -> float:
+        """Return P-9710 GP range utilization in percent."""
+        return parse_numeric_reply(self.query("GP", wait_s=0.005))
+
     def configure_flash_detection(self, range_id: int = 5):
         self.command("SB0")
         self.command(f"SR{int(range_id)}")
-        self.command("SN1")  # 0.1 ms internal CW integration for edge detection
+        self.command("SN1")
 
     def configure_effective(self, window_ms: int, c_s: float = 0.2, range_id: int = 5):
         self.command("SB0")
@@ -182,10 +173,7 @@ class P9710:
             t_mid = (t1 + t2) / 2.0
 
             if previous_value < threshold_lx <= value:
-                if previous_t is None:
-                    edge_time = t_mid
-                else:
-                    edge_time = (previous_t + t_mid) / 2.0
+                edge_time = t_mid if previous_t is None else (previous_t + t_mid) / 2.0
                 return edge_time, value
 
             previous_value = value
@@ -217,7 +205,6 @@ class P9710:
         if window_ms <= 0:
             raise ValueError("MI window must be positive.")
 
-        # Find one real flash, then predict only the immediately following flash.
         self.configure_flash_detection(range_id=range_id)
         t_ref, trigger_sample = self.detect_reference_flash(threshold_lx=threshold_lx)
 
@@ -236,9 +223,18 @@ class P9710:
         value = parse_numeric_reply(raw)
         start_error_ms = (actual_start - target_start) * 1000.0
 
+        # GP is requested immediately after the synchronized MI result.  This is
+        # the instrument's own range-utilization diagnostic for the selected
+        # fixed range.  Keep measurement valid even if GP itself is unavailable.
+        try:
+            range_utilization_pct = self.read_range_utilization()
+        except Exception:
+            range_utilization_pct = None
+
         return P9710EffectiveReading(
             e_effective_lx=value,
             trigger_sample_lx=trigger_sample,
+            range_utilization_pct=range_utilization_pct,
             pretrigger_ms=int(pretrigger_ms),
             window_ms=int(window_ms),
             period_s=float(period_s),
