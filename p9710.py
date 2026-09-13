@@ -21,6 +21,18 @@ class P9710Error(RuntimeError):
 
 
 @dataclass(frozen=True)
+class P9710CWReading:
+    cw_lx: float
+    peak_max_lx: float | None
+    peak_min_lx: float | None
+    peak_to_peak_lx: float | None
+    range_utilization_pct: float | None
+    range_id: int
+    integration_ms: float
+    sync_enabled: bool
+
+
+@dataclass(frozen=True)
 class P9710EffectiveReading:
     e_effective_lx: float
     trigger_sample_lx: float
@@ -55,7 +67,6 @@ class P9710:
         return self.serial is not None and self.serial.is_open
 
     def _open_serial_once(self):
-        """Open the port using the exact laboratory-validated P-9710 settings."""
         self.serial = serial.Serial(
             port=self.port,
             baudrate=9600,
@@ -149,8 +160,48 @@ class P9710:
         return parse_numeric_reply(raw), raw, t1, t2
 
     def read_range_utilization(self) -> float:
-        """Return P-9710 GP range utilization in percent."""
         return parse_numeric_reply(self.query("GP", wait_s=0.005))
+
+    def configure_cw(self, *, integration_ms: float = 100.0, range_id: int = 5, sync_enabled: bool = False):
+        if integration_ms < 0.1 or integration_ms > 6000.0:
+            raise ValueError("CW integration time must be between 0.1 ms and 6000 ms.")
+        self.command("SB0")
+        self.command(f"SR{int(range_id)}")
+        # SN uses 0.1 ms units: SN1000 = 100 ms.
+        self.command(f"SN{int(round(float(integration_ms) * 10.0))}")
+        self.command("SS1" if sync_enabled else "SS0")
+
+    def read_cw_snapshot(
+        self,
+        *,
+        integration_ms: float = 100.0,
+        range_id: int = 5,
+        sync_enabled: bool = False,
+    ) -> P9710CWReading:
+        self.configure_cw(
+            integration_ms=integration_ms,
+            range_id=range_id,
+            sync_enabled=sync_enabled,
+        )
+
+        cw_lx, _raw, _t1, _t2 = self.read_mv()
+
+        def optional(command: str):
+            try:
+                return parse_numeric_reply(self.query(command, wait_s=0.005))
+            except Exception:
+                return None
+
+        return P9710CWReading(
+            cw_lx=cw_lx,
+            peak_max_lx=optional("GA"),
+            peak_min_lx=optional("GB"),
+            peak_to_peak_lx=optional("GD"),
+            range_utilization_pct=optional("GP"),
+            range_id=int(range_id),
+            integration_ms=float(integration_ms),
+            sync_enabled=bool(sync_enabled),
+        )
 
     def configure_flash_detection(self, range_id: int = 5):
         self.command("SB0")
@@ -223,9 +274,6 @@ class P9710:
         value = parse_numeric_reply(raw)
         start_error_ms = (actual_start - target_start) * 1000.0
 
-        # GP is requested immediately after the synchronized MI result.  This is
-        # the instrument's own range-utilization diagnostic for the selected
-        # fixed range.  Keep measurement valid even if GP itself is unavailable.
         try:
             range_utilization_pct = self.read_range_utilization()
         except Exception:
