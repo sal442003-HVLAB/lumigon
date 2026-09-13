@@ -1,10 +1,10 @@
 """Continuous-reading controls for the P-9710 mode workspace.
 
 The underlying mode workspace deliberately owns all actual instrument reads.
-This runtime layer simply re-triggers each verified single-shot CW/peak read at
-an operator-selected interval, and never starts another read while the previous
-worker is still active.  It therefore preserves the same integration/range/
-synchronisation path used by the single-shot buttons.
+This runtime layer re-triggers each verified single-shot CW/peak read at an
+operator-selected interval and never starts another read while the previous
+worker is still active.  It also applies the fastest supported CW integration
+setting for live monitoring (0.1 ms = SN1).
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QStackedWidget,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -30,6 +29,10 @@ CW_MODE_NAMES = (
     "Peak Minimum",
     "Peak-to-Peak",
 )
+
+FASTEST_INTEGRATION_MS = 0.1
+MIN_REFRESH_S = 0.05
+DEFAULT_REFRESH_S = 0.10
 
 
 def _find_mode_combo(box):
@@ -55,15 +58,16 @@ def _find_read_button(page, mode_name: str):
     return None
 
 
-def _page_layout(page):
-    layout = page.layout()
-    if layout is None:
-        return None
-    return layout
+def _find_integration_spin(page):
+    """Find the CW integration control by its unique 0.1..6000 ms range."""
+    for spin in page.findChildren(QDoubleSpinBox):
+        if abs(spin.minimum() - 0.1) < 1e-9 and abs(spin.maximum() - 6000.0) < 1e-9:
+            return spin
+    return None
 
 
 def attach_p9710_continuous_runtime(window):
-    """Add Start/Stop continuous reading to the six CW/peak pages."""
+    """Add fast Start/Stop continuous reading to the six CW/peak pages."""
 
     if getattr(window, "p9710_continuous_timers", None) is not None:
         return window.p9710_continuous_timers
@@ -91,9 +95,20 @@ def attach_p9710_continuous_runtime(window):
     for index, mode_name in enumerate(CW_MODE_NAMES):
         page = stack.widget(index)
         read_button = _find_read_button(page, mode_name)
-        layout = _page_layout(page)
+        layout = page.layout()
         if read_button is None or layout is None:
             continue
+
+        # For live monitoring use the P-9710 minimum supported CW integration:
+        # SN1 = 1 x 0.1 ms = 0.1 ms. The operator can still raise it when needed.
+        integration_spin = _find_integration_spin(page)
+        if integration_spin is not None:
+            integration_spin.setSingleStep(0.1)
+            integration_spin.setValue(FASTEST_INTEGRATION_MS)
+            integration_spin.setToolTip(
+                "P-9710 CW integration time. Minimum 0.1 ms (SN1). "
+                "Increase it if you need more averaging/stability."
+            )
 
         continuous_row = QWidget(page)
         row = QHBoxLayout(continuous_row)
@@ -105,14 +120,14 @@ def attach_p9710_continuous_runtime(window):
         stop_button.setEnabled(False)
 
         interval_spin = QDoubleSpinBox()
-        interval_spin.setRange(0.20, 10.0)
+        interval_spin.setRange(MIN_REFRESH_S, 10.0)
         interval_spin.setDecimals(2)
-        interval_spin.setSingleStep(0.10)
+        interval_spin.setSingleStep(0.05)
         interval_spin.setSuffix(" s")
-        interval_spin.setValue(0.50)
+        interval_spin.setValue(DEFAULT_REFRESH_S)
         interval_spin.setToolTip(
-            "Requested refresh interval. If one instrument read takes longer, "
-            "Lumigon waits until it is finished and skips overlapping triggers."
+            "Requested refresh interval. Minimum 0.05 s. If one complete P-9710 "
+            "transaction takes longer, Lumigon waits for it and skips overlapping reads."
         )
 
         status = QLabel("Continuous: stopped")
@@ -125,8 +140,6 @@ def attach_p9710_continuous_runtime(window):
         row.addWidget(status)
         row.addStretch(1)
 
-        # Put the live controls directly below the single-shot controls/results.
-        # Grid pages accept a row-spanning QWidget; VBox pages simply append it.
         try:
             next_row = max(0, layout.rowCount() - 1)
             layout.addWidget(continuous_row, next_row, 0, 1, 5)
@@ -134,13 +147,12 @@ def attach_p9710_continuous_runtime(window):
             layout.addWidget(continuous_row)
 
         timer = QTimer(page)
-        timer.setTimerType(Qt.TimerType.CoarseTimer)
+        timer.setTimerType(Qt.TimerType.PreciseTimer)
 
         def make_tick(button):
             def tick():
-                # The mode workspace disables the read button while its QThread
-                # is active. Respect that state so serial transactions can never
-                # overlap.
+                # The mode workspace disables this button while its worker is
+                # active. Never overlap serial transactions.
                 if button.isEnabled():
                     button.click()
             return tick
@@ -149,14 +161,13 @@ def attach_p9710_continuous_runtime(window):
 
         def make_start(timer, start_button, stop_button, status, interval_spin, read_button):
             def start():
-                ms = max(200, int(round(interval_spin.value() * 1000.0)))
+                ms = max(50, int(round(interval_spin.value() * 1000.0)))
                 timer.setInterval(ms)
                 timer.start()
                 start_button.setEnabled(False)
                 stop_button.setEnabled(True)
-                status.setText(f"Continuous: running ({ms / 1000.0:.2f} s)")
+                status.setText(f"Continuous: running ({ms / 1000.0:.2f} s requested)")
                 status.setStyleSheet("color:#55EFC4; font-weight:700;")
-                # Give the operator an immediate first reading.
                 if read_button.isEnabled():
                     read_button.click()
             return start
@@ -178,10 +189,8 @@ def attach_p9710_continuous_runtime(window):
         timers.append(timer)
         controls.append((timer, start_button, stop_button, status))
 
-    # Never keep polling a page after the operator changes measurement mode.
     mode_combo.currentIndexChanged.connect(lambda _index: stop_all())
 
-    # Stop polling before/when the shared P-9710 connection is disconnected.
     for button in box.findChildren(QPushButton):
         if button.text() == "Disconnect":
             button.clicked.connect(stop_all)
