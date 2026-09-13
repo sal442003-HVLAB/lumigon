@@ -1,8 +1,8 @@
-"""Live visualization for the P-9710 MIOL grid pilot.
+"""Live visualization for the P-9710 MIOL pilot.
 
-The acquisition worker already flushes each completed point to CSV. This module
-intentionally reads that CSV instead of touching the instrument thread, so plot
-refreshes can never interfere with P-9710 timing or goniometer motion.
+The acquisition worker flushes each completed point to CSV. This module reads
+that CSV instead of touching instrument or motion threads, so plot refreshes
+cannot interfere with P-9710 timing or the goniometer bus.
 """
 
 from __future__ import annotations
@@ -58,8 +58,6 @@ def _unique(values, tol=1e-6):
 
 
 def attach_p9710_miol_live_plot(window):
-    """Attach a live Heatmap / Gamma-profile viewer below the MIOL pilot box."""
-
     if getattr(window, "p9710_miol_live_plot", None) is not None:
         return window.p9710_miol_live_plot
 
@@ -127,6 +125,7 @@ def attach_p9710_miol_live_plot(window):
         "rows": [],
         "last_size": None,
         "c_values": [],
+        "single_plane_default_applied": False,
     }
 
     def style_axis(ax):
@@ -163,7 +162,7 @@ def attach_p9710_miol_live_plot(window):
     def draw_heatmap():
         rows = state["rows"]
         if not rows:
-            clear_figure(heatmap_figure, heatmap_canvas, "Waiting for measured grid points")
+            clear_figure(heatmap_figure, heatmap_canvas, "Waiting for measured points")
             return
 
         c_values = _unique(r[0] for r in rows)
@@ -179,22 +178,10 @@ def attach_p9710_miol_live_plot(window):
         ax = heatmap_figure.add_subplot(111)
         style_axis(ax)
 
-        if len(c_values) > 1:
-            dc = min(abs(b - a) for a, b in zip(c_values, c_values[1:]))
-        else:
-            dc = 1.0
-        if len(g_values) > 1:
-            dg = min(abs(b - a) for a, b in zip(g_values, g_values[1:]))
-        else:
-            dg = 1.0
+        dc = min((abs(b - a) for a, b in zip(c_values, c_values[1:])), default=1.0)
+        dg = min((abs(b - a) for a, b in zip(g_values, g_values[1:])), default=1.0)
         extent = [c_values[0] - dc / 2, c_values[-1] + dc / 2, g_values[0] - dg / 2, g_values[-1] + dg / 2]
-        image = ax.imshow(
-            matrix,
-            origin="lower",
-            aspect="auto",
-            extent=extent,
-            interpolation="nearest",
-        )
+        image = ax.imshow(matrix, origin="lower", aspect="auto", extent=extent, interpolation="nearest")
         cbar = heatmap_figure.colorbar(image, ax=ax, pad=0.02)
         cbar.set_label("Luminous intensity [cd]", color="#DCEAF3")
         cbar.ax.tick_params(colors="#B9CAD6")
@@ -202,7 +189,6 @@ def attach_p9710_miol_live_plot(window):
         ax.set_xlabel("C angle [deg]", color="#DCEAF3")
         ax.set_ylabel("Gamma angle [deg]", color="#DCEAF3")
         ax.set_title("MIOL intensity map — measured I [cd]", color="#E8F2F7", fontweight="bold")
-
         finite = matrix[np.isfinite(matrix)]
         if finite.size:
             peak = float(np.max(finite))
@@ -210,14 +196,7 @@ def attach_p9710_miol_live_plot(window):
             if positions.size:
                 gi, ci = positions[0]
                 ax.plot(c_values[ci], g_values[gi], marker="x", markersize=9, markeredgewidth=2)
-                ax.annotate(
-                    f"Peak {peak:.1f} cd",
-                    (c_values[ci], g_values[gi]),
-                    xytext=(8, 8),
-                    textcoords="offset points",
-                    color="#EAF4FA",
-                    fontsize=9,
-                )
+                ax.annotate(f"Peak {peak:.1f} cd", (c_values[ci], g_values[gi]), xytext=(8, 8), textcoords="offset points", color="#EAF4FA", fontsize=9)
 
         heatmap_figure.subplots_adjust(left=0.10, right=0.90, bottom=0.14, top=0.88)
         heatmap_canvas.draw_idle()
@@ -239,7 +218,6 @@ def attach_p9710_miol_live_plot(window):
 
         gamma = [p[0] for p in plane]
         intensity = [p[1] for p in plane]
-
         profile_figure.clear()
         profile_figure.patch.set_facecolor("#101820")
         ax = profile_figure.add_subplot(111)
@@ -265,6 +243,18 @@ def attach_p9710_miol_live_plot(window):
 
     def redraw():
         draw_heatmap()
+        draw_profile()
+
+    def select_heatmap():
+        heatmap_button.setChecked(True)
+        profile_button.setChecked(False)
+        stack.setCurrentIndex(0)
+        draw_heatmap()
+
+    def select_profile():
+        profile_button.setChecked(True)
+        heatmap_button.setChecked(False)
+        stack.setCurrentIndex(1)
         draw_profile()
 
     def refresh_from_csv():
@@ -298,19 +288,14 @@ def attach_p9710_miol_live_plot(window):
             )
         else:
             status.setText("CSV created — waiting for first completed point…")
+
         redraw()
-
-    def select_heatmap():
-        heatmap_button.setChecked(True)
-        profile_button.setChecked(False)
-        stack.setCurrentIndex(0)
-        draw_heatmap()
-
-    def select_profile():
-        profile_button.setChecked(True)
-        heatmap_button.setChecked(False)
-        stack.setCurrentIndex(1)
-        draw_profile()
+        # During the commissioning pilot there is only one C plane, so the
+        # Gamma profile is the meaningful default view. Full-grid runs can still
+        # use the Intensity Map later.
+        if len(c_values) == 1 and not state["single_plane_default_applied"]:
+            state["single_plane_default_applied"] = True
+            select_profile()
 
     heatmap_button.clicked.connect(select_heatmap)
     profile_button.clicked.connect(select_profile)
