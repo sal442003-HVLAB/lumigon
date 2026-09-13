@@ -1,16 +1,14 @@
-"""P-9710 MIOL grid pilot for Lumigon Measurement.
+"""P-9710 MIOL single-plane pilot for Lumigon Measurement.
 
-This runtime intentionally lives beside the existing commissioning engine.  It
-adds a metrology-first pilot path for ICAO MIOL scans using the validated
-Gigahertz-Optik P-9710 connection:
+Commissioning scope of this pilot is deliberately narrow:
+- C is fixed at 0 deg and is NEVER commanded by this worker.
+- Gamma alone is scanned point-by-point.
+- Type A/B: synchronized P-9710 Schmidt-Clausen E-effective (MI).
+- Type C: P-9710 CW illuminance (MV).
+- Every completed point is flushed immediately to CSV.
 
-- Type A/B (flashing): P-9710 synchronized Schmidt-Clausen E-effective (MI)
-- Type C (steady): P-9710 CW illuminance (MV)
-- C x Gamma Step Scan with explicit motion -> settle -> acquire -> store
-- crash-resilient CSV output (one flushed row per completed point)
-
-The existing generic Measurement engine remains untouched while this pilot is
-validated on the real goniophotometer.
+A full C x Gamma run will be enabled only after this C=0 Gamma sweep is proven
+on the real goniophotometer.
 """
 
 from __future__ import annotations
@@ -23,7 +21,6 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
-    QFormLayout,
     QGridLayout,
     QGroupBox,
     QLabel,
@@ -34,14 +31,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from machine_config import C_LIMIT_DEG, GAMMA_LIMIT_DEG
+from machine_config import GAMMA_LIMIT_DEG
 from miol_icao import MIOL_PROFILES, icao_elevation_from_gamma, profile_type_from_text
 from motion_controller import C_AXIS, GAMMA
 
 
-DEFAULT_C_START_DEG = -45.0
-DEFAULT_C_END_DEG = 45.0
-DEFAULT_C_STEP_DEG = 5.0
+FIXED_C_DEG = 0.0
 DEFAULT_GAMMA_START_DEG = -10.0
 DEFAULT_GAMMA_END_DEG = 10.0
 DEFAULT_GAMMA_STEP_DEG = 0.5
@@ -53,7 +48,7 @@ DEFAULT_WINDOW_MS = 600
 DEFAULT_THRESHOLD_LX = 5.0
 DEFAULT_SC_C_S = 0.2
 DEFAULT_CW_INTEGRATION_MS = 0.1
-ANGLE_TOLERANCE_DEG = 0.02
+ANGLE_TOLERANCE_DEG = 0.05
 
 
 def _axis_values(start: float, end: float, step: float):
@@ -81,13 +76,16 @@ def _axis_values(start: float, end: float, step: float):
     return values
 
 
-def _build_grid(c_start, c_end, c_step, gamma_start, gamma_end, gamma_step):
-    c_values = _axis_values(c_start, c_end, c_step)
-    gamma_values = _axis_values(gamma_start, gamma_end, gamma_step)
-    return [(c, gamma) for c in c_values for gamma in gamma_values]
+def _build_gamma_plane(gamma_start, gamma_end, gamma_step):
+    return [
+        (FIXED_C_DEG, gamma)
+        for gamma in _axis_values(gamma_start, gamma_end, gamma_step)
+    ]
 
 
 class P9710MIOLGridWorker(QThread):
+    """Gamma-only MIOL acquisition worker with C physically fixed at zero."""
+
     progress = Signal(str)
     point_started = Signal(int, int, float, float)
     point_result = Signal(object)
@@ -139,15 +137,28 @@ class P9710MIOLGridWorker(QThread):
             self.msleep(max(1, min(50, int(remaining * 1000.0))))
         return not self.isInterruptionRequested()
 
-    def _move_if_needed(self, axis, target: float):
-        actual = self.motion.get_current_angle(axis)
+    def _verify_c_zero(self):
+        actual = float(self.motion.get_current_angle(C_AXIS))
+        if abs(actual - FIXED_C_DEG) > ANGLE_TOLERANCE_DEG:
+            raise RuntimeError(
+                f"Pilot scan requires C fixed at 0.000°. Current C is {actual:+.3f}°. "
+                "Return C to zero manually, then start again. This pilot will not command the C axis."
+            )
+        return actual
+
+    def _move_gamma_if_needed(self, target: float):
+        actual = float(self.motion.get_current_angle(GAMMA))
         if abs(actual - target) <= ANGLE_TOLERANCE_DEG:
             return
-        self.motion.move_absolute(axis, target)
+        self.motion.move_absolute(GAMMA, target)
 
     def _read_point(self):
         spec = MIOL_PROFILES[self.profile_code]
         if spec.flashing:
+            # Never wait forever for a flash. Two pulse periods plus margin is
+            # sufficient for a valid repeating signal and exposes weak-beam/range
+            # problems as an explicit error rather than an apparent frozen run.
+            trigger_timeout_s = max(8.0, 2.5 * self.period_s)
             reading = self.meter.synchronized_effective(
                 period_s=self.period_s,
                 pretrigger_ms=self.pretrigger_ms,
@@ -155,6 +166,7 @@ class P9710MIOLGridWorker(QThread):
                 threshold_lx=self.threshold_lx,
                 range_id=self.range_id,
                 c_s=self.sc_c_s,
+                trigger_timeout_s=trigger_timeout_s,
             )
             return {
                 "basis": "E-effective (Schmidt-Clausen)",
@@ -182,9 +194,12 @@ class P9710MIOLGridWorker(QThread):
             if self.profile_code not in MIOL_PROFILES:
                 raise RuntimeError("Select an ICAO MIOL Type A, B or C profile.")
             if not self.points:
-                raise RuntimeError("No grid points were generated.")
+                raise RuntimeError("No Gamma scan points were generated.")
             if self.distance_m <= 0.0:
                 raise RuntimeError("Measurement distance must be greater than zero.")
+
+            self.progress.emit("Verifying fixed C plane at 0.000°…")
+            self._verify_c_zero()
 
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
             fieldnames = [
@@ -217,16 +232,21 @@ class P9710MIOLGridWorker(QThread):
                         )
                         return
 
+                    # Safety invariant: C is checked before every Gamma move and
+                    # is never commanded by this worker.
+                    self._verify_c_zero()
+
                     self.point_started.emit(index, total, c_deg, gamma_deg)
                     self.progress.emit(
-                        f"Point {index}/{total}: C {c_deg:+.2f}°, Gamma {gamma_deg:+.2f}°"
+                        f"Point {index}/{total}: C fixed 0.00°, Gamma {gamma_deg:+.2f}°"
                     )
+                    self._move_gamma_if_needed(gamma_deg)
 
-                    self._move_if_needed(C_AXIS, c_deg)
                     if self.isInterruptionRequested():
-                        self.aborted.emit("Stopped after C-axis move. Partial CSV was preserved.")
+                        self.aborted.emit(
+                            "Stopped after Gamma move. Partial CSV was preserved."
+                        )
                         return
-                    self._move_if_needed(GAMMA, gamma_deg)
 
                     self.progress.emit(
                         f"Point {index}/{total}: settling {self.settle_time_s:.1f} s"
@@ -236,7 +256,13 @@ class P9710MIOLGridWorker(QThread):
                         return
 
                     self.progress.emit(f"Point {index}/{total}: acquiring P-9710")
-                    measured = self._read_point()
+                    try:
+                        measured = self._read_point()
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"Acquisition failed at C=0.000°, Gamma={gamma_deg:+.3f}°: {exc}"
+                        ) from exc
+
                     e_lx = float(measured["e_lx"])
                     i_cd = e_lx * self.distance_m * self.distance_m
 
@@ -260,9 +286,7 @@ class P9710MIOLGridWorker(QThread):
                     handle.flush()
                     self.point_result.emit(row)
 
-            self.progress.emit("Measurement complete — returning C to Home…")
-            self.motion.return_to_zero(C_AXIS)
-            self.progress.emit("Returning Gamma to Home…")
+            self.progress.emit("Measurement complete — returning Gamma to Home…")
             self.motion.return_to_zero(GAMMA)
             self.completed.emit(str(self.output_path))
 
@@ -271,16 +295,16 @@ class P9710MIOLGridWorker(QThread):
 
 
 def attach_p9710_miol_grid_runtime(window):
-    """Attach the P-9710 MIOL pilot controls to Measurement."""
+    """Attach the C=0 / Gamma-only P-9710 MIOL pilot to Measurement."""
 
     if getattr(window, "p9710_miol_grid_box", None) is not None:
         return window.p9710_miol_grid_box
 
     workspace = getattr(window, "measurement_workspace", None)
     if workspace is None or workspace.layout() is None:
-        raise RuntimeError("Measurement workspace must exist before MIOL grid runtime.")
+        raise RuntimeError("Measurement workspace must exist before MIOL pilot runtime.")
 
-    box = QGroupBox("P-9710 MIOL Grid — Pilot")
+    box = QGroupBox("P-9710 MIOL — C=0° Gamma Pilot")
     root = QVBoxLayout(box)
     form = QGridLayout()
 
@@ -339,22 +363,22 @@ def attach_p9710_miol_grid_runtime(window):
     root.addLayout(form)
 
     note = QLabel(
-        "Pilot path: Type A/B uses synchronized P-9710 E-effective; Type C uses CW. "
-        "Each completed point is flushed immediately to CSV. This ±45° C scan is partial/local, "
-        "not a full-360° ICAO compliance run."
+        "Commissioning pilot: C is fixed at 0° and is never commanded by this run. "
+        "Only Gamma scans. Type A/B uses synchronized P-9710 E-effective; Type C uses CW. "
+        "Each completed point is flushed immediately to CSV."
     )
     note.setWordWrap(True)
     note.setStyleSheet("color:#8AA8BC;")
     root.addWidget(note)
 
-    status = QLabel("Ready — connect P-9710 and both servo drives before starting.")
+    status = QLabel("Ready — set C to 0°, connect P-9710 and servo drives, then start.")
     status.setWordWrap(True)
     progress = QProgressBar()
     progress.setRange(0, 1)
     progress.setValue(0)
     progress.setFormat("0 / 0")
 
-    start_button = QPushButton("Start P-9710 MIOL Grid")
+    start_button = QPushButton("Start C=0° Gamma Pilot")
     stop_button = QPushButton("Stop safely")
     stop_button.setEnabled(False)
     root.addWidget(status)
@@ -377,18 +401,16 @@ def attach_p9710_miol_grid_runtime(window):
             return
         box.setVisible(True)
 
+        # Mirror the pilot in the generic Measurement controls so the operator
+        # sees exactly what will happen: one C plane, Gamma sweep only.
         scan = getattr(window, "measurement_scan_mode_combo", None)
         if scan is not None:
-            scan.setCurrentIndex(2)
-        window.measurement_c_start.setValue(max(-C_LIMIT_DEG, DEFAULT_C_START_DEG))
-        window.measurement_c_end.setValue(min(C_LIMIT_DEG, DEFAULT_C_END_DEG))
-        window.measurement_c_step.setValue(DEFAULT_C_STEP_DEG)
+            scan.setCurrentIndex(0)  # Single C / Gamma Sweep
+        window.measurement_c_start.setValue(FIXED_C_DEG)
+        window.measurement_c_end.setValue(FIXED_C_DEG)
         window.measurement_gamma_start.setValue(max(-GAMMA_LIMIT_DEG, DEFAULT_GAMMA_START_DEG))
         window.measurement_gamma_end.setValue(min(GAMMA_LIMIT_DEG, DEFAULT_GAMMA_END_DEG))
         window.measurement_gamma_step.setValue(DEFAULT_GAMMA_STEP_DEG)
-        order = getattr(window, "measurement_scan_order_combo", None)
-        if order is not None:
-            order.setCurrentIndex(0)
         build = getattr(window, "measurement_build_plan_button", None)
         if build is not None:
             build.click()
@@ -414,26 +436,24 @@ def attach_p9710_miol_grid_runtime(window):
         if meter is None or not meter.is_connected:
             return "Connect the P-9710 in Luxmeter > Gigahertz-Optik P-9710 first."
         if worker_holder["worker"] is not None:
-            return "A P-9710 MIOL grid is already running."
+            return "A P-9710 MIOL pilot is already running."
+        try:
+            c_actual = float(motion.get_current_angle(C_AXIS))
+        except Exception as exc:
+            return f"Cannot verify C=0° before starting: {exc}"
+        if abs(c_actual) > ANGLE_TOLERANCE_DEG:
+            return (
+                f"C must be at 0.000° for this pilot. Current C is {c_actual:+.3f}°. "
+                "Return C to zero manually first; the pilot will not move C."
+            )
         return None
 
     def build_points():
-        c0 = window.measurement_c_start.value()
-        c1 = window.measurement_c_end.value()
         g0 = window.measurement_gamma_start.value()
         g1 = window.measurement_gamma_end.value()
-        if min(c0, c1) < -C_LIMIT_DEG or max(c0, c1) > C_LIMIT_DEG:
-            raise ValueError(f"C scan must remain inside ±{C_LIMIT_DEG:g}°.")
         if min(g0, g1) < -GAMMA_LIMIT_DEG or max(g0, g1) > GAMMA_LIMIT_DEG:
             raise ValueError(f"Gamma scan must remain inside ±{GAMMA_LIMIT_DEG:g}°.")
-        return _build_grid(
-            c0,
-            c1,
-            window.measurement_c_step.value(),
-            g0,
-            g1,
-            window.measurement_gamma_step.value(),
-        )
+        return _build_gamma_plane(g0, g1, window.measurement_gamma_step.value())
 
     def finish_ui():
         worker = worker_holder["worker"]
@@ -444,9 +464,6 @@ def attach_p9710_miol_grid_runtime(window):
         start_button.setEnabled(True)
         stop_button.setEnabled(False)
 
-        # The main HMI timer polls servo feedback. It must be suspended while
-        # this worker owns the shared Modbus RTU bus, otherwise two threads can
-        # interleave requests and produce truncated frames (for example 2/9 bytes).
         timer = getattr(window, "timer", None)
         modbus = getattr(window, "modbus", None)
         if (
@@ -461,12 +478,12 @@ def attach_p9710_miol_grid_runtime(window):
     def start():
         problem = prerequisites()
         if problem:
-            QMessageBox.warning(window, "P-9710 MIOL Grid", problem)
+            QMessageBox.warning(window, "P-9710 MIOL Pilot", problem)
             return
         try:
             points = build_points()
         except Exception as exc:
-            QMessageBox.warning(window, "P-9710 MIOL Grid", str(exc))
+            QMessageBox.warning(window, "P-9710 MIOL Pilot", str(exc))
             return
 
         code = current_profile_code()
@@ -477,14 +494,14 @@ def attach_p9710_miol_grid_runtime(window):
 
         answer = QMessageBox.question(
             window,
-            "Confirm P-9710 MIOL Grid",
-            f"Start {len(points)} points?\n\n"
-            f"C: {window.measurement_c_start.value():+.1f}° → {window.measurement_c_end.value():+.1f}° "
-            f"step {window.measurement_c_step.value():g}°\n"
-            f"Gamma: {window.measurement_gamma_start.value():+.1f}° → {window.measurement_gamma_end.value():+.1f}° "
+            "Confirm C=0° Gamma Pilot",
+            f"Start {len(points)} Gamma points with C fixed at 0.000°?\n\n"
+            f"Gamma: {window.measurement_gamma_start.value():+.1f}° → "
+            f"{window.measurement_gamma_end.value():+.1f}° "
             f"step {window.measurement_gamma_step.value():g}°\n"
             f"Profile: MIOL Type {code}\nBasis: {basis}\nDistance: {distance:.2f} m\n\n"
-            "Both axes will move sequentially. The CSV is written after every completed point.",
+            "IMPORTANT: this run will not command the C axis. Only Gamma will move. "
+            "The CSV is written after every completed point.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -495,8 +512,6 @@ def attach_p9710_miol_grid_runtime(window):
         if callable(stop_continuous):
             stop_continuous()
 
-        # Suspend normal HMI servo polling before starting the worker. The grid
-        # worker performs its own position reads/moves over the same Modbus bus.
         timer = getattr(window, "timer", None)
         polling_state["main_timer_was_active"] = bool(timer is not None and timer.isActive())
         if polling_state["main_timer_was_active"]:
@@ -506,7 +521,7 @@ def attach_p9710_miol_grid_runtime(window):
         sample_text = "sample" if sample_id is None else (sample_id.text().strip() or "sample")
         safe_sample = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in sample_text)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = Path.cwd() / "measurement_data" / f"MIOL_{code}_{safe_sample}_{stamp}.csv"
+        output_path = Path.cwd() / "measurement_data" / f"MIOL_{code}_C0_{safe_sample}_{stamp}.csv"
 
         meter = window.p9710_meter_holder["meter"]
         worker = P9710MIOLGridWorker(
@@ -533,7 +548,7 @@ def attach_p9710_miol_grid_runtime(window):
         progress.setRange(0, len(points))
         progress.setValue(0)
         progress.setFormat(f"0 / {len(points)}")
-        status.setText(f"Starting — output: {output_path}")
+        status.setText(f"Starting C=0° Gamma pilot — output: {output_path}")
         start_button.setEnabled(False)
         stop_button.setEnabled(True)
 
@@ -542,12 +557,16 @@ def attach_p9710_miol_grid_runtime(window):
 
         def on_started(index, total, c_deg, gamma_deg):
             progress.setValue(index - 1)
-            progress.setFormat(f"{index - 1} / {total}  •  C {c_deg:+.1f}°  Gamma {gamma_deg:+.1f}°")
+            progress.setFormat(
+                f"{index - 1} / {total}  •  C 0.0°  Gamma {gamma_deg:+.1f}°"
+            )
 
         def on_result(row):
             point = int(row["point"])
             progress.setValue(point)
-            progress.setFormat(f"{point} / {len(points)}  •  {float(row['I_cd']):.1f} cd")
+            progress.setFormat(
+                f"{point} / {len(points)}  •  {float(row['I_cd']):.1f} cd"
+            )
 
             table = getattr(window, "measurement_plan_table", None)
             if table is not None and point - 1 < table.rowCount():
@@ -558,16 +577,22 @@ def attach_p9710_miol_grid_runtime(window):
                 table.setItem(point - 1, 8, QTableWidgetItem("Measured"))
 
         def on_completed(path):
-            status.setText(f"Complete — CSV: {path}")
-            QMessageBox.information(window, "P-9710 MIOL Grid", f"Measurement complete.\n\nCSV:\n{path}")
+            status.setText(f"Complete — Gamma returned Home — CSV: {path}")
+            QMessageBox.information(
+                window,
+                "P-9710 MIOL Pilot",
+                f"C=0° Gamma pilot complete.\n\nCSV:\n{path}",
+            )
 
         def on_aborted(message):
             status.setText(message)
-            QMessageBox.information(window, "P-9710 MIOL Grid", message)
+            QMessageBox.information(window, "P-9710 MIOL Pilot", message)
 
         def on_failed(message):
-            status.setText("Measurement failed — partial CSV is preserved if any points completed.")
-            QMessageBox.critical(window, "P-9710 MIOL Grid", message)
+            status.setText(
+                "Pilot stopped due to an error — partial CSV is preserved if any points completed."
+            )
+            QMessageBox.critical(window, "P-9710 MIOL Pilot", message)
 
         worker.progress.connect(on_progress)
         worker.point_started.connect(on_started)
@@ -583,7 +608,9 @@ def attach_p9710_miol_grid_runtime(window):
         if worker is None:
             return
         stop_button.setEnabled(False)
-        status.setText("Stop requested — current instrument read/move will finish, then the run stops safely.")
+        status.setText(
+            "Stop requested — current instrument read/move will finish, then the pilot stops safely."
+        )
         worker.requestInterruption()
 
     start_button.clicked.connect(start)
