@@ -1,6 +1,6 @@
 """Approximate lux-capacity hint for the P-9710 range selector.
 
-The P-9710 electrical ranges are defined by detector current.  For the
+The P-9710 electrical ranges are defined by detector current. For the
 currently characterised lux detector (~0.376 nA/lx), this helper presents the
 approximate illuminance corresponding to full-scale current for each range.
 It is a convenience hint only; GP remains the authoritative live utilization
@@ -52,10 +52,19 @@ def attach_p9710_range_hint(window):
     if range_spin is None:
         return None
 
-    hint = QLabel()
-    hint.setWordWrap(True)
-    hint.setStyleSheet("color:#8FA9B9;")
-    hint.setToolTip(
+    # Reuse the existing Selected range label instead of adding another widget
+    # into the settings grid. This keeps the compact layout intact and avoids
+    # overlapping Trigger threshold / Schmidt-Clausen controls.
+    selected_range_label = None
+    for label in box.findChildren(QLabel):
+        if label.text().startswith("Selected range:"):
+            selected_range_label = label
+            break
+
+    if selected_range_label is None:
+        return None
+
+    selected_range_label.setToolTip(
         "Approximate full-scale illuminance calculated from the characterised "
         "detector sensitivity (~0.376 nA/lx). Use GP for actual range utilization."
     )
@@ -64,16 +73,13 @@ def attach_p9710_range_hint(window):
         range_id = int(range_spin.value())
         current_na = RANGE_MAX_CURRENT_NA[range_id]
         max_lux = current_na / DETECTOR_SENSITIVITY_NA_PER_LX
-        hint.setText(
-            f"R{range_id} approx. full scale: {_format_lux(max_lux)} "
-            f"(detector ~{DETECTOR_SENSITIVITY_NA_PER_LX:.3f} nA/lx)"
+        selected_range_label.setText(
+            f"Selected range: R{range_id}  •  approx. full scale {_format_lux(max_lux)}"
         )
 
-    # Put the hint directly beside the Range selector row.
-    box.layout().addWidget(hint, 3, 2, 1, 4)
     range_spin.valueChanged.connect(update_hint)
     update_hint()
 
     window.p9710_effective_range_spin = range_spin
-    window.p9710_range_hint_label = hint
-    return hint
+    window.p9710_range_hint_label = selected_range_label
+    return selected_range_label
