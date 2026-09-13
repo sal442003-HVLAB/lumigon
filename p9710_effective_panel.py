@@ -12,6 +12,7 @@ import math
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QGridLayout,
     QGroupBox,
@@ -35,20 +36,15 @@ DEFAULT_C_S = 0.2
 
 
 def auto_pretrigger_ms(_pulse_ms: int) -> int:
-    # Laboratory validation showed 50/100/150 ms equivalent for a 350 ms pulse.
-    # Keep the centre value as a robust default.
     return 100
 
 
 def auto_window_ms(pulse_ms: int) -> int:
-    # Reserve 100 ms before the pulse and ~150 ms after it, rounded upward to
-    # a clean 50 ms increment. 350 ms therefore becomes 600 ms.
     target = max(100, int(pulse_ms)) + 250
     return int(math.ceil(target / 50.0) * 50)
 
 
 class P9710MeasureWorker(QThread):
-    connected = Signal(str, str)
     measured = Signal(object)
     failed = Signal(str)
 
@@ -82,17 +78,12 @@ def attach_p9710_effective_panel(window):
     layout.setHorizontalSpacing(12)
     layout.setVerticalSpacing(7)
 
-    port_spin = None
-    from PySide6.QtWidgets import QComboBox
     port_combo = QComboBox()
     port_combo.setEditable(True)
     port_combo.addItem(DEFAULT_PORT)
     if getattr(window, "luxmeter_port_combo", None) is not None:
         current = window.luxmeter_port_combo.currentText().strip()
-        if current:
-            port_combo.setCurrentText(current)
-        else:
-            port_combo.setCurrentText(DEFAULT_PORT)
+        port_combo.setCurrentText(current or DEFAULT_PORT)
     else:
         port_combo.setCurrentText(DEFAULT_PORT)
 
@@ -161,10 +152,14 @@ def attach_p9710_effective_panel(window):
     i_label = QLabel("I-effective: —")
     trigger_label = QLabel("Trigger sample: —")
     timing_label = QLabel("Timing: —")
+    utilization_label = QLabel("Range utilization (GP): —")
+    utilization_label.setStyleSheet("font-weight:700; color:#8FA9B9;")
+    selected_range_label = QLabel(f"Selected range: R{DEFAULT_RANGE}")
+    selected_range_label.setStyleSheet("color:#8FA9B9;")
 
     note = QLabel(
         "One-step synchronization: detect one real flash with MV, predict only the next flash, "
-        "then start P-9710 MI before it. Auto timing remains manually overridable."
+        "then start P-9710 MI before it. Range utilization is read from the instrument GP diagnostic."
     )
     note.setWordWrap(True)
     note.setStyleSheet("color:#7892A3;")
@@ -201,7 +196,10 @@ def attach_p9710_effective_panel(window):
     layout.addWidget(i_label, 4, 3)
     layout.addWidget(trigger_label, 4, 4)
     layout.addWidget(timing_label, 4, 5)
-    layout.addWidget(note, 5, 0, 1, 6)
+
+    layout.addWidget(selected_range_label, 5, 0, 1, 2)
+    layout.addWidget(utilization_label, 5, 2, 1, 2)
+    layout.addWidget(note, 6, 0, 1, 6)
 
     meter_holder = {"meter": None}
 
@@ -212,6 +210,9 @@ def attach_p9710_effective_panel(window):
             window_spin.setValue(auto_window_ms(pulse_spin.value()))
         pre_spin.setEnabled(not auto_pre.isChecked())
         window_spin.setEnabled(not auto_window.isChecked())
+
+    def update_range_caption():
+        selected_range_label.setText(f"Selected range: R{range_spin.value()}")
 
     def set_busy(busy: bool):
         for control in (
@@ -252,6 +253,8 @@ def attach_p9710_effective_panel(window):
         meter_holder["meter"] = None
         status.setText("Disconnected")
         status.setStyleSheet("color:#8FA9B9;")
+        utilization_label.setText("Range utilization (GP): —")
+        utilization_label.setStyleSheet("font-weight:700; color:#8FA9B9;")
 
     def start_measurement():
         meter = meter_holder["meter"]
@@ -271,6 +274,8 @@ def attach_p9710_effective_panel(window):
 
         status.setText("Waiting for reference flash, then measuring next flash…")
         status.setStyleSheet("color:#40B9D0; font-weight:600;")
+        utilization_label.setText(f"Range utilization (GP): measuring on R{range_spin.value()}…")
+        utilization_label.setStyleSheet("font-weight:700; color:#40B9D0;")
         set_busy(True)
 
         worker = P9710MeasureWorker(meter, settings, parent=window)
@@ -282,21 +287,31 @@ def attach_p9710_effective_panel(window):
             e_label.setText(f"E-effective: {reading.e_effective_lx:.4f} lx")
             i_label.setText(f"I-effective: {i_effective_cd:.2f} cd")
             trigger_label.setText(f"Trigger sample: {reading.trigger_sample_lx:.3f} lx")
-            timing_label.setText(
-                f"Pre {reading.pretrigger_ms} ms | Window {reading.window_ms} ms"
-            )
-            status.setText(
-                f"Complete — software start error {reading.software_start_error_ms:+.2f} ms"
-            )
+            timing_label.setText(f"Pre {reading.pretrigger_ms} ms | Window {reading.window_ms} ms")
+            selected_range_label.setText(f"Selected range: R{reading.range_id}")
+
+            if reading.range_utilization_pct is None:
+                utilization_label.setText("Range utilization (GP): unavailable")
+                utilization_label.setStyleSheet("font-weight:700; color:#E7C76A;")
+            else:
+                utilization_label.setText(
+                    f"Range utilization (GP): {reading.range_utilization_pct:.1f}%  |  R{reading.range_id}"
+                )
+                utilization_label.setStyleSheet("font-weight:700; color:#55EFC4;")
+
+            status.setText(f"Complete — software start error {reading.software_start_error_ms:+.2f} ms")
             status.setStyleSheet("color:#55EFC4;")
 
             window.p9710_last_e_effective_lx = reading.e_effective_lx
             window.p9710_last_i_effective_cd = i_effective_cd
+            window.p9710_last_range_utilization_pct = reading.range_utilization_pct
             window.p9710_last_reading = reading
 
         def failed(message):
             status.setText("Measurement failed")
             status.setStyleSheet("color:#FF7675; font-weight:600;")
+            utilization_label.setText("Range utilization (GP): measurement failed")
+            utilization_label.setStyleSheet("font-weight:700; color:#FF7675;")
             QMessageBox.critical(window, "P-9710 Synchronized Measurement", message)
 
         def finished():
@@ -315,11 +330,13 @@ def attach_p9710_effective_panel(window):
     pulse_spin.valueChanged.connect(apply_auto_values)
     auto_pre.toggled.connect(apply_auto_values)
     auto_window.toggled.connect(apply_auto_values)
+    range_spin.valueChanged.connect(update_range_caption)
     connect_button.clicked.connect(connect_meter)
     disconnect_button.clicked.connect(disconnect_meter)
     measure_button.clicked.connect(start_measurement)
 
     apply_auto_values()
+    update_range_caption()
     measure_button.setEnabled(False)
 
     insert_index = parent_layout.indexOf(getattr(window, "luxmeter_effective_box", lux_box))
@@ -336,6 +353,7 @@ def attach_p9710_effective_panel(window):
     window.p9710_effective_worker = None
     window.p9710_last_e_effective_lx = None
     window.p9710_last_i_effective_cd = None
+    window.p9710_last_range_utilization_pct = None
     window.p9710_last_reading = None
 
     return box
