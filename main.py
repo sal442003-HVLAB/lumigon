@@ -19,6 +19,7 @@ from effective_intensity_test import attach_effective_intensity_test
 from p9710_mode_workspace import attach_p9710_mode_workspace
 from p9710_continuous_runtime import attach_p9710_continuous_runtime
 from p9710_miol_grid_runtime import attach_p9710_miol_grid_runtime
+from p9710_miol_live_plot import attach_p9710_miol_live_plot
 from luxmeter_workspace_tabs import attach_luxmeter_workspace_tabs
 from tabbed_layout import organize_main_window_tabs
 from execution_mode_controls import attach_execution_mode_controls
@@ -213,6 +214,7 @@ def main():
     attach_measurement_ui_fixes(window)
     attach_miol_profile_runtime(window)
     attach_p9710_miol_grid_runtime(window)
+    attach_p9710_miol_live_plot(window)
     attach_miol_capture_monitor(window)
     attach_measurement_profile_catalog(window)
     attach_obstacle_profile_workflow(window)
