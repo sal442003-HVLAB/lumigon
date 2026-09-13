@@ -1,0 +1,219 @@
+"""Gigahertz-Optik P-9710 RS232 support for Lumigon.
+
+Validated laboratory settings:
+- 9600 baud, 8N1
+- LF command terminator
+- fixed range during a flash capture
+- Schmidt-Clausen MI measurement with one-step synchronization
+"""
+
+from __future__ import annotations
+
+import re
+import time
+from dataclasses import dataclass
+
+import serial
+
+
+class P9710Error(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class P9710EffectiveReading:
+    e_effective_lx: float
+    trigger_sample_lx: float
+    pretrigger_ms: int
+    window_ms: int
+    period_s: float
+    range_id: int
+    software_start_error_ms: float
+
+
+_NUMBER_RE = re.compile(r"[-+]?\d*\.?\d+(?:[Ee][-+]?\d+)?")
+
+
+def parse_numeric_reply(raw: str) -> float:
+    match = _NUMBER_RE.search(raw or "")
+    if not match:
+        raise P9710Error(f"No numeric value in P-9710 reply: {raw!r}")
+    return float(match.group(0))
+
+
+class P9710:
+    def __init__(self, port: str, timeout_s: float = 3.0):
+        self.port = str(port)
+        self.timeout_s = float(timeout_s)
+        self.serial = None
+        self.version = None
+        self.unit = None
+
+    @property
+    def is_connected(self) -> bool:
+        return self.serial is not None and self.serial.is_open
+
+    def connect(self) -> str:
+        self.disconnect()
+        try:
+            self.serial = serial.Serial(
+                port=self.port,
+                baudrate=9600,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=self.timeout_s,
+                write_timeout=self.timeout_s,
+                xonxoff=False,
+                rtscts=False,
+                dsrdtr=False,
+            )
+            self.version = self.query("GI")
+            self.unit = self.query("GU")
+        except Exception:
+            self.disconnect()
+            raise
+        if not self.version:
+            self.disconnect()
+            raise P9710Error("P-9710 did not return a firmware identification.")
+        return self.version
+
+    def disconnect(self):
+        ser = self.serial
+        self.serial = None
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:
+                pass
+
+    def query(self, command: str, wait_s: float = 0.01, timeout_s: float | None = None) -> str:
+        if not self.is_connected:
+            raise P9710Error("P-9710 is not connected.")
+
+        ser = self.serial
+        old_timeout = ser.timeout
+        if timeout_s is not None:
+            ser.timeout = float(timeout_s)
+        try:
+            ser.reset_input_buffer()
+            ser.write((str(command).strip() + "\n").encode("ascii"))
+            ser.flush()
+            if wait_s > 0:
+                time.sleep(wait_s)
+            raw = ser.readline().decode("ascii", errors="replace").strip()
+        finally:
+            ser.timeout = old_timeout
+
+        if not raw:
+            raise P9710Error(f"No response to {command!r}.")
+        return raw
+
+    def command(self, command: str, wait_s: float = 0.02):
+        """Send a setting command. P-9710 setting commands may return an empty line."""
+        if not self.is_connected:
+            raise P9710Error("P-9710 is not connected.")
+        ser = self.serial
+        ser.reset_input_buffer()
+        ser.write((str(command).strip() + "\n").encode("ascii"))
+        ser.flush()
+        if wait_s > 0:
+            time.sleep(wait_s)
+        # Drain an optional acknowledgement without requiring one.
+        old_timeout = ser.timeout
+        ser.timeout = 0.05
+        try:
+            ser.readline()
+        finally:
+            ser.timeout = old_timeout
+
+    def read_mv(self) -> tuple[float, str, float, float]:
+        t1 = time.perf_counter()
+        raw = self.query("MV", wait_s=0.005)
+        t2 = time.perf_counter()
+        return parse_numeric_reply(raw), raw, t1, t2
+
+    def configure_flash_detection(self, range_id: int = 5):
+        self.command("SB0")
+        self.command(f"SR{int(range_id)}")
+        self.command("SN1")  # 0.1 ms internal CW integration for edge detection
+
+    def configure_effective(self, window_ms: int, c_s: float = 0.2, range_id: int = 5):
+        self.command("SB0")
+        self.command(f"SR{int(range_id)}")
+        self.command(f"SU{float(c_s):g}")
+        self.command(f"SM{int(window_ms)}")
+        self.command("SZ0")
+
+    def detect_reference_flash(self, threshold_lx: float = 5.0) -> tuple[float, float]:
+        previous_value = 0.0
+        previous_t = None
+
+        while True:
+            value, _raw, t1, t2 = self.read_mv()
+            t_mid = (t1 + t2) / 2.0
+
+            if previous_value < threshold_lx <= value:
+                if previous_t is None:
+                    edge_time = t_mid
+                else:
+                    edge_time = (previous_t + t_mid) / 2.0
+                return edge_time, value
+
+            previous_value = value
+            previous_t = t_mid
+
+    @staticmethod
+    def _wait_until(target_time: float):
+        while True:
+            remaining = target_time - time.perf_counter()
+            if remaining <= 0.0:
+                return
+            if remaining > 0.020:
+                time.sleep(remaining - 0.010)
+
+    def synchronized_effective(
+        self,
+        *,
+        period_s: float,
+        pretrigger_ms: int,
+        window_ms: int,
+        threshold_lx: float = 5.0,
+        range_id: int = 5,
+        c_s: float = 0.2,
+    ) -> P9710EffectiveReading:
+        if period_s <= 0:
+            raise ValueError("Pulse period must be positive.")
+        if pretrigger_ms < 0:
+            raise ValueError("Pre-trigger cannot be negative.")
+        if window_ms <= 0:
+            raise ValueError("MI window must be positive.")
+
+        # Find one real flash, then predict only the immediately following flash.
+        self.configure_flash_detection(range_id=range_id)
+        t_ref, trigger_sample = self.detect_reference_flash(threshold_lx=threshold_lx)
+
+        self.configure_effective(window_ms=window_ms, c_s=c_s, range_id=range_id)
+
+        predicted_next_flash = t_ref + float(period_s)
+        target_start = predicted_next_flash - (float(pretrigger_ms) / 1000.0)
+        self._wait_until(target_start)
+
+        actual_start = time.perf_counter()
+        raw = self.query(
+            "MI",
+            wait_s=(float(window_ms) / 1000.0) + 0.05,
+            timeout_s=(float(window_ms) / 1000.0) + 2.0,
+        )
+        value = parse_numeric_reply(raw)
+        start_error_ms = (actual_start - target_start) * 1000.0
+
+        return P9710EffectiveReading(
+            e_effective_lx=value,
+            trigger_sample_lx=trigger_sample,
+            pretrigger_ms=int(pretrigger_ms),
+            window_ms=int(window_ms),
+            period_s=float(period_s),
+            range_id=int(range_id),
+            software_start_error_ms=start_error_ms,
+        )
