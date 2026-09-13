@@ -48,7 +48,13 @@ _NUMBER_RE = re.compile(r"[-+]?\d*\.?\d+(?:[Ee][-+]?\d+)?")
 
 
 def parse_numeric_reply(raw: str) -> float:
-    match = _NUMBER_RE.search(raw or "")
+    text = (raw or "").strip()
+    # P-9710 status/error replies such as ?16 (overload) and ?32 (underload)
+    # are not measurements.  Never let the numeric error code become a fake
+    # Lux/current value.
+    if text.startswith("?"):
+        raise P9710Error(f"P-9710 returned status/error reply: {text}")
+    match = _NUMBER_RE.search(text)
     if not match:
         raise P9710Error(f"No numeric value in P-9710 reply: {raw!r}")
     return float(match.group(0))
