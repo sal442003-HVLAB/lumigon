@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from p9710 import P9710
+from p9710_range_hint import range_span_text
 
 
 DEFAULT_PORT = "COM7"
@@ -35,7 +36,6 @@ DEFAULT_RANGE = 5
 DEFAULT_THRESHOLD_LX = 5.0
 DEFAULT_C_S = 0.2
 
-# Desired operating region for the P-9710 selected range.
 RANGE_UTILIZATION_MIN_PCT = 15.0
 RANGE_UTILIZATION_MAX_PCT = 85.0
 
@@ -162,7 +162,7 @@ def attach_p9710_effective_panel(window):
     selected_range_label.setStyleSheet("color:#8FA9B9;")
 
     utilization_label = QLabel(
-        f"Range utilization (GP) — desired {RANGE_UTILIZATION_MIN_PCT:.0f}–{RANGE_UTILIZATION_MAX_PCT:.0f}%"
+        f"Range utilization (GP) — R{DEFAULT_RANGE}  |  approx. {range_span_text(DEFAULT_RANGE)}"
     )
     utilization_label.setStyleSheet("font-weight:700; color:#8FA9B9;")
 
@@ -242,7 +242,12 @@ def attach_p9710_effective_panel(window):
         window_spin.setEnabled(not auto_window.isChecked())
 
     def update_range_caption():
-        selected_range_label.setText(f"Selected range: R{range_spin.value()}")
+        range_id = range_spin.value()
+        selected_range_label.setText(f"Selected range: R{range_id}")
+        utilization_label.setText(
+            f"Range utilization (GP) — R{range_id}  |  approx. {range_span_text(range_id)}"
+        )
+        utilization_label.setStyleSheet("font-weight:700; color:#8FA9B9;")
 
     def set_utilization_bar(value_pct):
         if value_pct is None:
@@ -259,10 +264,7 @@ def attach_p9710_effective_panel(window):
         utilization_bar.setValue(int(round(value_pct)))
         utilization_bar.setFormat(f"{value_pct:.1f}%")
 
-        outside = (
-            value_pct < RANGE_UTILIZATION_MIN_PCT
-            or value_pct > RANGE_UTILIZATION_MAX_PCT
-        )
+        outside = value_pct < RANGE_UTILIZATION_MIN_PCT or value_pct > RANGE_UTILIZATION_MAX_PCT
         chunk_color = "#D9534F" if outside else "#2EAD67"
         utilization_bar.setStyleSheet(
             "QProgressBar { border:1px solid #34495E; border-radius:4px; background:#14212B; "
@@ -309,10 +311,7 @@ def attach_p9710_effective_panel(window):
         meter_holder["meter"] = None
         status.setText("Disconnected")
         status.setStyleSheet("color:#8FA9B9;")
-        utilization_label.setText(
-            f"Range utilization (GP) — desired {RANGE_UTILIZATION_MIN_PCT:.0f}–{RANGE_UTILIZATION_MAX_PCT:.0f}%"
-        )
-        utilization_label.setStyleSheet("font-weight:700; color:#8FA9B9;")
+        update_range_caption()
         set_utilization_bar(None)
 
     def start_measurement():
@@ -333,7 +332,10 @@ def attach_p9710_effective_panel(window):
 
         status.setText("Waiting for reference flash, then measuring next flash…")
         status.setStyleSheet("color:#40B9D0; font-weight:600;")
-        utilization_label.setText(f"Range utilization (GP) — measuring on R{range_spin.value()}…")
+        utilization_label.setText(
+            f"Range utilization (GP) — measuring on R{range_spin.value()}  |  "
+            f"approx. {range_span_text(range_spin.value())}"
+        )
         utilization_label.setStyleSheet("font-weight:700; color:#40B9D0;")
         utilization_bar.setRange(0, 0)
         utilization_bar.setFormat("Measuring…")
@@ -353,7 +355,10 @@ def attach_p9710_effective_panel(window):
             selected_range_label.setText(f"Selected range: R{reading.range_id}")
 
             if reading.range_utilization_pct is None:
-                utilization_label.setText("Range utilization (GP): unavailable")
+                utilization_label.setText(
+                    f"Range utilization (GP): unavailable  |  R{reading.range_id}  |  "
+                    f"approx. {range_span_text(reading.range_id)}"
+                )
                 utilization_label.setStyleSheet("font-weight:700; color:#E7C76A;")
                 set_utilization_bar(None)
             else:
@@ -361,7 +366,7 @@ def attach_p9710_effective_panel(window):
                 outside = gp < RANGE_UTILIZATION_MIN_PCT or gp > RANGE_UTILIZATION_MAX_PCT
                 utilization_label.setText(
                     f"Range utilization (GP): {gp:.1f}%  |  R{reading.range_id}  |  "
-                    f"Target {RANGE_UTILIZATION_MIN_PCT:.0f}–{RANGE_UTILIZATION_MAX_PCT:.0f}%"
+                    f"approx. {range_span_text(reading.range_id)}"
                 )
                 utilization_label.setStyleSheet(
                     "font-weight:700; color:#FF7675;" if outside
@@ -381,7 +386,10 @@ def attach_p9710_effective_panel(window):
             utilization_bar.setRange(0, 100)
             status.setText("Measurement failed")
             status.setStyleSheet("color:#FF7675; font-weight:600;")
-            utilization_label.setText("Range utilization (GP): measurement failed")
+            utilization_label.setText(
+                f"Range utilization (GP): measurement failed  |  R{range_spin.value()}  |  "
+                f"approx. {range_span_text(range_spin.value())}"
+            )
             utilization_label.setStyleSheet("font-weight:700; color:#FF7675;")
             set_utilization_bar(None)
             QMessageBox.critical(window, "P-9710 Synchronized Measurement", message)
