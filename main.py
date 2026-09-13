@@ -17,6 +17,7 @@ from motor_control_refinement import attach_motor_control_refinement
 from luxmeter_controls import attach_luxmeter_controls
 from effective_intensity_test import attach_effective_intensity_test
 from p9710_effective_panel import attach_p9710_effective_panel
+from luxmeter_workspace_tabs import attach_luxmeter_workspace_tabs
 from tabbed_layout import organize_main_window_tabs
 from execution_mode_controls import attach_execution_mode_controls
 from measurement_ui_fixes import attach_measurement_ui_fixes
@@ -195,13 +196,13 @@ def main():
             "Continuous bounded moves enabled."
         )
 
-    # First split the original controls into their functional tabs.  The
-    # standalone effective-intensity panel must be attached AFTER this step so
-    # it is parented directly to the Luxmeter tab rather than the old root
-    # layout (which is subsequently classified into Motor Control).
+    # First split the original controls into their functional tabs. The
+    # instrument-specific panels are attached afterwards and then grouped into
+    # compact second-level tabs so the Luxmeter workspace stays uncluttered.
     organize_main_window_tabs(window)
     attach_effective_intensity_test(window)
     attach_p9710_effective_panel(window)
+    attach_luxmeter_workspace_tabs(window)
 
     attach_results_workspace(window)
     attach_results_preload_refinement(window)
