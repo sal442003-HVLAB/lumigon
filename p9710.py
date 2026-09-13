@@ -43,7 +43,7 @@ def parse_numeric_reply(raw: str) -> float:
 
 class P9710:
     def __init__(self, port: str, timeout_s: float = 3.0):
-        self.port = str(port)
+        self.port = str(port).strip()
         self.timeout_s = float(timeout_s)
         self.serial = None
         self.version = None
@@ -53,30 +53,58 @@ class P9710:
     def is_connected(self) -> bool:
         return self.serial is not None and self.serial.is_open
 
-    def connect(self) -> str:
+    def _open_serial_once(self):
+        """Open the port using the exact laboratory-validated P-9710 settings."""
+        self.serial = serial.Serial(
+            port=self.port,
+            baudrate=9600,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=self.timeout_s,
+            write_timeout=self.timeout_s,
+            xonxoff=False,
+            rtscts=False,
+            dsrdtr=False,
+        )
+
+    def connect(self, attempts: int = 3, retry_delay_s: float = 0.25) -> str:
+        """Connect and identify the meter.
+
+        Some USB-RS232 drivers on Windows occasionally fail their first
+        SetCommState/configuration call with WinError 31 even though the port and
+        instrument are healthy.  The standalone laboratory script proved COM7
+        works with these exact settings, so retry the complete open/configure
+        transaction a few times before reporting a real connection failure.
+        """
         self.disconnect()
-        try:
-            self.serial = serial.Serial(
-                port=self.port,
-                baudrate=9600,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                timeout=self.timeout_s,
-                write_timeout=self.timeout_s,
-                xonxoff=False,
-                rtscts=False,
-                dsrdtr=False,
-            )
-            self.version = self.query("GI")
-            self.unit = self.query("GU")
-        except Exception:
-            self.disconnect()
-            raise
-        if not self.version:
-            self.disconnect()
-            raise P9710Error("P-9710 did not return a firmware identification.")
-        return self.version
+        self.version = None
+        self.unit = None
+
+        attempts = max(1, int(attempts))
+        last_exc = None
+
+        for attempt in range(1, attempts + 1):
+            try:
+                self._open_serial_once()
+                self.version = self.query("GI")
+                self.unit = self.query("GU")
+
+                if not self.version:
+                    raise P9710Error("P-9710 did not return a firmware identification.")
+
+                return self.version
+
+            except Exception as exc:
+                last_exc = exc
+                self.disconnect()
+                if attempt < attempts:
+                    time.sleep(max(0.0, float(retry_delay_s)))
+
+        raise P9710Error(
+            f"Cannot connect to P-9710 on {self.port!r} after {attempts} attempts. "
+            f"Last error: {last_exc}"
+        ) from last_exc
 
     def disconnect(self):
         ser = self.serial
