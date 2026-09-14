@@ -192,7 +192,6 @@ def main():
     install_measurement_results_runtime()
     install_p9710_fullscan_safety()
     install_p9710_results_bridge()
-    install_results_heatmap_orientation()
 
     window = MainWindow()
     attach_motor_control_refinement(window)
@@ -218,6 +217,9 @@ def main():
     attach_results_viewport_fix(window)
     attach_grid_results_runtime(window)
     attach_miol_results_runtime(window)
+    # Install this last because grid/MIOL visual refinement layers may replace
+    # GridResultsCharts._draw_heatmap during their own setup.
+    install_results_heatmap_orientation()
     attach_results_reload_control(window)
     _apply_confirmed_axis_limits(window)
     attach_execution_mode_controls(window)
