@@ -22,6 +22,10 @@ from p9710_miol_grid_runtime import attach_p9710_miol_grid_runtime
 from p9710_miol_live_plot import attach_p9710_miol_live_plot
 from p9710_fullscan_safety import install_p9710_fullscan_safety
 from p9710_results_bridge import install_p9710_results_bridge
+from results_operator_refinements import (
+    install_results_heatmap_orientation,
+    attach_results_reload_control,
+)
 from luxmeter_workspace_tabs import attach_luxmeter_workspace_tabs
 from tabbed_layout import organize_main_window_tabs
 from execution_mode_controls import attach_execution_mode_controls
@@ -188,6 +192,7 @@ def main():
     install_measurement_results_runtime()
     install_p9710_fullscan_safety()
     install_p9710_results_bridge()
+    install_results_heatmap_orientation()
 
     window = MainWindow()
     attach_motor_control_refinement(window)
@@ -213,6 +218,7 @@ def main():
     attach_results_viewport_fix(window)
     attach_grid_results_runtime(window)
     attach_miol_results_runtime(window)
+    attach_results_reload_control(window)
     _apply_confirmed_axis_limits(window)
     attach_execution_mode_controls(window)
     attach_measurement_ui_fixes(window)
