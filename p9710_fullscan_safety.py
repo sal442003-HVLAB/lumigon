@@ -1,7 +1,8 @@
-"""Safety refinements for the full P-9710 MIOL scan.
+"""Safety and scan refinements for the full P-9710 MIOL scan.
 
 This module patches only the adaptive trigger/range behaviour used by the
-full-grid MIOL workflow. The manual/single-plane P-9710 paths remain unchanged.
+full-grid MIOL workflow and the C-plane generation used by that workflow.
+The manual/single-plane P-9710 paths remain unchanged.
 
 Full-scan rules:
 - dark/off-state ?32 is a valid OFF baseline, not a reason to jump to R7;
@@ -12,7 +13,11 @@ Full-scan rules:
 - tiny sub-0.05 lx noise excursions are never accepted as an ON pulse;
 - selected range is locked for MI;
 - an MI result that is essentially zero despite a clearly detected flash is
-  rejected and the same point is reacquired once instead of writing a false zero.
+  rejected and the same point is reacquired once instead of writing a false zero;
+- when the requested C range crosses zero, C planes are anchored at 0 degrees;
+- the outer C plane is the largest exact step multiple inside the requested
+  envelope (for example ±45 with 10-degree planes becomes ±40);
+- default C-plane spacing is 5 degrees and default distance is 5.00 m.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ import math
 import statistics
 import time
 
+import p9710_miol_grid_runtime as grid_runtime
 from p9710 import P9710, P9710Error
 from p9710_miol_grid_runtime import P9710MIOLGridWorker
 
@@ -34,7 +40,11 @@ MIN_RANGE_WINDOW_S = 4.5
 MISSED_MI_RATIO = 0.02
 MISSED_MI_ABS_LX = 0.002
 
+DEFAULT_C_PLANE_STEP_DEG = 5.0
+DEFAULT_MEASUREMENT_DISTANCE_M = 5.00
+
 _ORIGINAL_SYNC_ADAPTIVE = P9710.synchronized_effective_adaptive
+_ORIGINAL_BUILD_GRID = grid_runtime._build_grid
 
 
 def _safe_detect_reference_flash_adaptive(
@@ -194,9 +204,72 @@ def _keep_selected_range(selected_range: int, gp_pct):
     return max(0, min(7, int(selected_range)))
 
 
+def _zero_anchored_c_values(start: float, end: float, step: float):
+    """Generate C planes on an exact step grid anchored at 0 degrees.
+
+    When the requested interval crosses zero, 0 degrees is always the first C
+    plane. Subsequent positive planes are contiguous, followed by negative
+    planes. Endpoints that are not exact step multiples are intentionally not
+    added. Thus a ±45-degree envelope with 10-degree spacing uses ±40 degrees,
+    while 5-degree spacing reaches ±45 degrees exactly.
+
+    For one-sided scans that do not cross zero, the original axis generator is
+    retained so custom engineering scans keep their established behaviour.
+    """
+
+    start = float(start)
+    end = float(end)
+    step = abs(float(step))
+    if step <= 0.0:
+        raise ValueError("C-plane step must be greater than zero.")
+
+    lower = min(start, end)
+    upper = max(start, end)
+    epsilon = max(1e-9, step * 1e-6)
+
+    if lower > epsilon or upper < -epsilon:
+        return grid_runtime._axis_values(start, end, step)
+
+    positive_count = int(math.floor((max(0.0, upper) + epsilon) / step))
+    negative_count = int(math.floor((max(0.0, -lower) + epsilon) / step))
+
+    positive = [round(index * step, 6) for index in range(1, positive_count + 1)]
+    negative = [round(-index * step, 6) for index in range(1, negative_count + 1)]
+
+    if start <= end:
+        return [0.0, *positive, *negative]
+    return [0.0, *negative, *positive]
+
+
+def _build_zero_anchored_grid(
+    c_start,
+    c_end,
+    c_step,
+    gamma_start,
+    gamma_end,
+    gamma_step,
+):
+    """Build the MIOL grid with zero-anchored C planes and Gamma serpentine."""
+
+    c_values = _zero_anchored_c_values(c_start, c_end, c_step)
+    gamma_values = grid_runtime._axis_values(gamma_start, gamma_end, gamma_step)
+    points = []
+    for plane_index, c_deg in enumerate(c_values):
+        sweep = gamma_values if plane_index % 2 == 0 else reversed(gamma_values)
+        points.extend((c_deg, gamma_deg) for gamma_deg in sweep)
+    return points
+
+
 def install_p9710_fullscan_safety():
-    """Install guarded trigger/range and missed-capture protection."""
+    """Install guarded acquisition plus zero-anchored C-plane generation."""
 
     P9710.detect_reference_flash_adaptive = _safe_detect_reference_flash_adaptive
     P9710.synchronized_effective_adaptive = _verified_synchronized_effective_adaptive
     P9710MIOLGridWorker._next_range = staticmethod(_keep_selected_range)
+
+    # These globals are read by attach_p9710_miol_grid_runtime() when the
+    # Measurement controls are created, so changing them here updates the visible
+    # defaults without changing the standalone/manual P-9710 workspaces.
+    grid_runtime.DEFAULT_C_STEP_DEG = DEFAULT_C_PLANE_STEP_DEG
+    grid_runtime.DEFAULT_DISTANCE_M = DEFAULT_MEASUREMENT_DISTANCE_M
+    grid_runtime._build_grid = _build_zero_anchored_grid
