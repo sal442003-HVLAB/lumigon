@@ -9,6 +9,7 @@ and analyse the just-completed scan without manually browsing for the CSV.
 from __future__ import annotations
 
 from measurement_run_io import load_measurement_run_csv
+from miol_zero_plane_results_patch import install_miol_zero_plane_results_patch
 from p9710_miol_grid_runtime import P9710MIOLGridWorker
 
 
@@ -43,6 +44,9 @@ def install_p9710_results_bridge():
     global _INSTALLED, _ORIGINAL_INIT
     if _INSTALLED:
         return
+
+    # Install MIOL scan/result refinements before any Measurement run is built.
+    install_miol_zero_plane_results_patch()
 
     _ORIGINAL_INIT = P9710MIOLGridWorker.__init__
 
