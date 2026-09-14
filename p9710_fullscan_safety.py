@@ -1,18 +1,17 @@
 """Safety refinements for the full P-9710 MIOL scan.
 
 This module patches only the adaptive trigger/range behaviour used by the
-full-grid MIOL workflow.  It deliberately keeps the proven single-plane and
-manual P-9710 paths unchanged.
+full-grid MIOL workflow. The manual/single-plane P-9710 paths remain unchanged.
 
-Key rules:
-- A dark/off-state ?32 during flash search is treated as a valid baseline state,
-  not as an immediate reason to jump to a more sensitive range.
-- Range changes during flash search are limited to one step at a time.
-- GP never changes the next point's starting range by itself; GP remains a
-  diagnostic/warning quantity.
-- A more sensitive range is tried only after a complete search window produced
-  no reliable rising edge on the current range.
-- Once the edge is found, the selected range stays fixed for the MI capture.
+Full-scan rules:
+- dark/off-state ?32 is a valid OFF baseline, not a reason to jump to R7;
+- range changes are one step at a time and only after a complete search window;
+- GP is diagnostic only and never changes range by itself;
+- rising-edge timing prefers a real OFF -> ON transition and confirms the pulse
+  with a second valid sample;
+- selected range is locked for MI;
+- an MI result that is essentially zero despite a clearly detected flash is
+  rejected and the same point is reacquired once instead of writing a false zero.
 """
 
 from __future__ import annotations
@@ -26,9 +25,14 @@ from p9710_miol_grid_runtime import P9710MIOLGridWorker
 
 
 MIN_RISE_LX = 0.002
-NOISE_MULTIPLIER = 6.0
-CONFIRM_FRACTION = 0.40
+NOISE_MULTIPLIER = 8.0
+RELATIVE_RISE_FRACTION = 0.05
+CONFIRM_FRACTION = 0.50
 MIN_RANGE_WINDOW_S = 4.5
+MISSED_MI_RATIO = 0.02
+MISSED_MI_ABS_LX = 0.002
+
+_ORIGINAL_SYNC_ADAPTIVE = P9710.synchronized_effective_adaptive
 
 
 def _safe_detect_reference_flash_adaptive(
@@ -39,10 +43,12 @@ def _safe_detect_reference_flash_adaptive(
     gp_low_pct: float = 15.0,
     gp_high_pct: float = 85.0,
 ):
-    """Find a real rising edge without letting dark-state underload force R7.
+    """Find a real flash edge with conservative range selection.
 
-    ``gp_low_pct`` and ``gp_high_pct`` are accepted for API compatibility but
-    intentionally do not cause a range change.  GP is returned as diagnostics.
+    The strongest timing cue is an instrument under-range during the OFF phase
+    followed by two valid ON samples. If the baseline is already measurable,
+    a statistically and relatively significant positive rise is required.
+    GP is returned for diagnostics only.
     """
 
     del gp_low_pct, gp_high_pct
@@ -54,22 +60,18 @@ def _safe_detect_reference_flash_adaptive(
 
     while time.perf_counter() < global_deadline:
         self.configure_flash_detection(range_id=range_id)
-
         remaining_total = global_deadline - time.perf_counter()
         if remaining_total <= 0.0:
             break
 
-        # Give the current range enough time to see at least one normal flash
-        # cycle in the present laboratory setup before considering more gain.
         range_window_s = min(MIN_RANGE_WINDOW_S, remaining_total)
         range_deadline = time.perf_counter() + range_window_s
 
         history: list[float] = []
-        last_value = 0.0
+        last_value = None
         last_time = None
         candidate = None
-        saw_any_valid = False
-        saw_underload = False
+        saw_off_state = False
         restart_with_new_range = False
 
         while time.perf_counter() < range_deadline:
@@ -80,9 +82,8 @@ def _safe_detect_reference_flash_adaptive(
                 last_error = exc
 
                 if status == "underload":
-                    # During a flashing source the OFF interval can legitimately
-                    # under-range. Treat it as a near-zero baseline sample.
-                    saw_underload = True
+                    # Normal OFF phase for a flashing source. Do not change range.
+                    saw_off_state = True
                     history.append(0.0)
                     if len(history) > 12:
                         history.pop(0)
@@ -92,8 +93,7 @@ def _safe_detect_reference_flash_adaptive(
                     continue
 
                 if status == "overload" and range_id > 0:
-                    # Genuine overload: one step less sensitive, then reacquire
-                    # the same point from scratch.
+                    # ON pulse really overloads this range: one step less sensitive.
                     range_id -= 1
                     restart_with_new_range = True
                     break
@@ -104,18 +104,18 @@ def _safe_detect_reference_flash_adaptive(
             if not math.isfinite(value):
                 continue
 
-            saw_any_valid = True
             recent = history[-8:]
             baseline = statistics.median(recent) if recent else 0.0
-            if recent:
-                deviations = [abs(v - baseline) for v in recent]
-                noise = statistics.median(deviations) if deviations else 0.0
-            else:
-                noise = 0.0
-            rise_floor = max(MIN_RISE_LX, NOISE_MULTIPLIER * noise)
+            deviations = [abs(v - baseline) for v in recent] if recent else []
+            noise = statistics.median(deviations) if deviations else 0.0
+            rise_floor = max(
+                MIN_RISE_LX,
+                NOISE_MULTIPLIER * noise,
+                abs(baseline) * RELATIVE_RISE_FRACTION,
+            )
 
-            # Confirm a candidate on the following valid sample. This rejects a
-            # single serial/noise spike from becoming the timing reference.
+            # Candidate must survive one following valid sample. This is the key
+            # guard against noise/spikes being used as the timing reference.
             if candidate is not None:
                 edge_time, candidate_value, candidate_baseline, candidate_floor = candidate
                 confirm_level = max(
@@ -130,12 +130,16 @@ def _safe_detect_reference_flash_adaptive(
                     return edge_time, max(candidate_value, value), range_id, gp
                 candidate = None
 
-            rising = (
-                value > last_value
-                and value - baseline >= rise_floor
-            )
-            if saw_underload and value >= rise_floor:
-                rising = True
+            # Preferred case: we have explicitly seen the OFF state and now see
+            # a valid positive sample. Otherwise use a conservative baseline rise.
+            if saw_off_state:
+                rising = value >= rise_floor
+            else:
+                rising = (
+                    last_value is not None
+                    and value > last_value
+                    and value - baseline >= rise_floor
+                )
 
             if rising:
                 edge_time = t_mid if last_time is None else (last_time + t_mid) / 2.0
@@ -150,9 +154,8 @@ def _safe_detect_reference_flash_adaptive(
         if restart_with_new_range:
             continue
 
-        # No reliable edge on this range. Only now, after a full search window,
-        # is one step more sensitivity allowed. This prevents dark ?32 samples
-        # from causing an immediate R5 -> R6 -> R7 cascade.
+        # Only after an entire range window failed do we try one more-sensitive
+        # range. This prevents an OFF-state ?32 from cascading R5 -> R6 -> R7.
         if range_id < 7:
             range_id += 1
             continue
@@ -162,20 +165,48 @@ def _safe_detect_reference_flash_adaptive(
     if last_error is not None:
         detail = f" Last instrument status: {last_error}."
     raise P9710Error(
-        "No reliable rising edge was detected after guarded one-step range search."
-        f"{detail} Check that the source is flashing and that the detector receives modulated light."
+        "No reliable OFF-to-ON flash edge was detected after guarded one-step range search."
+        f"{detail} Check source flashing, detector alignment, and signal level."
+    )
+
+
+def _verified_synchronized_effective_adaptive(self: P9710, **kwargs):
+    """Acquire MI and reject a clearly missed pulse instead of saving ~zero.
+
+    For the present MIOL workflow a detected flash followed by an MI result below
+    both an absolute floor and 2% of the trigger sample is almost certainly a
+    timing miss. Reacquire the same angular point once from a fresh reference
+    flash. No averaging or interpolation is used.
+    """
+
+    last = None
+    for attempt in range(2):
+        reading = _ORIGINAL_SYNC_ADAPTIVE(self, **kwargs)
+        last = reading
+        floor = max(MISSED_MI_ABS_LX, abs(reading.trigger_sample_lx) * MISSED_MI_RATIO)
+        if reading.e_effective_lx > floor:
+            return reading
+        if attempt == 0:
+            time.sleep(0.05)
+
+    raise P9710Error(
+        "MI capture was near zero twice despite a detected flash. "
+        f"Last E-effective={last.e_effective_lx:.6g} lx, "
+        f"trigger sample={last.trigger_sample_lx:.6g} lx. "
+        "Point rejected instead of writing a false zero."
     )
 
 
 def _keep_selected_range(selected_range: int, gp_pct):
-    """Do not let GP alone change the next point's starting range."""
+    """Keep the proven range for the next nearby point; GP is diagnostic only."""
 
     del gp_pct
     return max(0, min(7, int(selected_range)))
 
 
 def install_p9710_fullscan_safety():
-    """Install guarded adaptive trigger/range logic for the full MIOL scan."""
+    """Install guarded trigger/range and missed-capture protection."""
 
     P9710.detect_reference_flash_adaptive = _safe_detect_reference_flash_adaptive
+    P9710.synchronized_effective_adaptive = _verified_synchronized_effective_adaptive
     P9710MIOLGridWorker._next_range = staticmethod(_keep_selected_range)
