@@ -46,7 +46,7 @@ PROFILE_MAX_MS = 3000
 PROFILE_STEP_MS = 100
 
 SPEED_MIN_RPM = 0.5
-SPEED_MAX_RPM = 15.0
+SPEED_MAX_RPM = 50.0
 SPEED_STEP_RPM = 0.5
 
 # Gamma baseline selected for normal commissioning use.
