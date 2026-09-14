@@ -21,6 +21,7 @@ from p9710_continuous_runtime import attach_p9710_continuous_runtime
 from p9710_miol_grid_runtime import attach_p9710_miol_grid_runtime
 from p9710_miol_live_plot import attach_p9710_miol_live_plot
 from p9710_fullscan_safety import install_p9710_fullscan_safety
+from p9710_results_bridge import install_p9710_results_bridge
 from luxmeter_workspace_tabs import attach_luxmeter_workspace_tabs
 from tabbed_layout import organize_main_window_tabs
 from execution_mode_controls import attach_execution_mode_controls
@@ -186,6 +187,7 @@ def main():
     install_test_plan_reuse_eta_refinement()
     install_measurement_results_runtime()
     install_p9710_fullscan_safety()
+    install_p9710_results_bridge()
 
     window = MainWindow()
     attach_motor_control_refinement(window)
