@@ -77,9 +77,20 @@ def _axis_values(start: float, end: float, step: float):
 
 
 def _build_grid(c_start, c_end, c_step, gamma_start, gamma_end, gamma_step):
+    """Build a serpentine C x Gamma scan to avoid deadhead Gamma returns.
+
+    Plane 0 follows the requested Gamma direction, plane 1 reverses it, and so
+    on. Therefore after each C increment Gamma starts the next plane from the
+    endpoint where the previous plane finished instead of travelling back across
+    the whole Gamma span without measuring.
+    """
     c_values = _axis_values(c_start, c_end, c_step)
     gamma_values = _axis_values(gamma_start, gamma_end, gamma_step)
-    return [(c, gamma) for c in c_values for gamma in gamma_values]
+    points = []
+    for plane_index, c_deg in enumerate(c_values):
+        sweep = gamma_values if plane_index % 2 == 0 else reversed(gamma_values)
+        points.extend((c_deg, gamma_deg) for gamma_deg in sweep)
+    return points
 
 
 class P9710MIOLGridWorker(QThread):
@@ -359,6 +370,7 @@ def attach_p9710_miol_grid_runtime(window):
 
     note = QLabel(
         "Full local scan: C −45°…+45° at 0.5° and Gamma −10°…+10° at 0.5°. "
+        "Gamma uses a serpentine sweep so each new C plane continues from the previous Gamma endpoint. "
         "Type A/B has no fixed lux trigger threshold: Lumigon detects a rising edge, "
         "adapts P-9710 range before the pulse, then locks that range for MI. "
         "Every completed point is flushed immediately to CSV."
@@ -452,6 +464,25 @@ def attach_p9710_miol_grid_runtime(window):
 
     def finish_ui():
         worker = worker_holder["worker"]
+
+        # A user-requested safe stop means the machine must finish in the known
+        # Session Home position. Do this while normal HMI polling is still
+        # suspended so the shared Modbus bus remains single-owner.
+        if worker is not None and worker.isInterruptionRequested():
+            try:
+                status.setText("Safe stop — returning Gamma to Home…")
+                window.motion.return_to_zero(GAMMA)
+                status.setText("Safe stop — returning C to Home…")
+                window.motion.return_to_zero(C_AXIS)
+                status.setText("Safe stop complete — axes at Home (0°, 0°). Partial CSV preserved.")
+            except Exception as exc:
+                status.setText(f"Safe stop requested, but Home return failed: {exc}")
+                QMessageBox.critical(
+                    window,
+                    "P-9710 MIOL Scan",
+                    f"Measurement stopped, but automatic return to Home failed.\n\n{exc}",
+                )
+
         if worker is not None:
             worker.deleteLater()
         worker_holder["worker"] = None
@@ -495,6 +526,7 @@ def attach_p9710_miol_grid_runtime(window):
             f"Gamma: {window.measurement_gamma_start.value():+.1f}° → {window.measurement_gamma_end.value():+.1f}° "
             f"step {window.measurement_gamma_step.value():g}°\n"
             f"Profile: MIOL Type {code}\nBasis: {basis}\nDistance: {distance:.2f} m\n\n"
+            "Serpentine Gamma sweep is enabled: successive C planes alternate Gamma direction. "
             "Both axes will move. P-9710 range may adapt before each flash, but remains fixed during MI. "
             "The CSV is flushed after every completed point.",
             QMessageBox.Yes | QMessageBox.No,
@@ -542,7 +574,7 @@ def attach_p9710_miol_grid_runtime(window):
         progress.setRange(0, len(points))
         progress.setValue(0)
         progress.setFormat(f"0 / {len(points)}")
-        status.setText(f"Starting full scan — output: {output_path}")
+        status.setText(f"Starting full serpentine scan — output: {output_path}")
         start_button.setEnabled(False)
         stop_button.setEnabled(True)
 
@@ -572,8 +604,7 @@ def attach_p9710_miol_grid_runtime(window):
             )
 
         def on_aborted(message):
-            status.setText(message)
-            QMessageBox.information(window, "P-9710 MIOL Scan", message)
+            status.setText(message + " Returning to Home…")
 
         def on_failed(message):
             status.setText("Scan stopped due to an error — partial CSV is preserved.")
@@ -594,7 +625,7 @@ def attach_p9710_miol_grid_runtime(window):
             return
         stop_button.setEnabled(False)
         status.setText(
-            "Stop requested — current instrument read/move will finish, then the run stops safely."
+            "Safe stop requested — current instrument read/move will finish, then both axes return to Home (0°, 0°)."
         )
         worker.requestInterruption()
 
