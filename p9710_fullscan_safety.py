@@ -9,6 +9,7 @@ Full-scan rules:
 - GP is diagnostic only and never changes range by itself;
 - rising-edge timing prefers a real OFF -> ON transition and confirms the pulse
   with a second valid sample;
+- tiny sub-0.05 lx noise excursions are never accepted as an ON pulse;
 - selected range is locked for MI;
 - an MI result that is essentially zero despite a clearly detected flash is
   rejected and the same point is reacquired once instead of writing a false zero.
@@ -25,6 +26,7 @@ from p9710_miol_grid_runtime import P9710MIOLGridWorker
 
 
 MIN_RISE_LX = 0.002
+MIN_VALID_ON_LX = 0.05
 NOISE_MULTIPLIER = 8.0
 RELATIVE_RISE_FRACTION = 0.05
 CONFIRM_FRACTION = 0.50
@@ -82,7 +84,6 @@ def _safe_detect_reference_flash_adaptive(
                 last_error = exc
 
                 if status == "underload":
-                    # Normal OFF phase for a flashing source. Do not change range.
                     saw_off_state = True
                     history.append(0.0)
                     if len(history) > 12:
@@ -93,7 +94,6 @@ def _safe_detect_reference_flash_adaptive(
                     continue
 
                 if status == "overload" and range_id > 0:
-                    # ON pulse really overloads this range: one step less sensitive.
                     range_id -= 1
                     restart_with_new_range = True
                     break
@@ -114,11 +114,10 @@ def _safe_detect_reference_flash_adaptive(
                 abs(baseline) * RELATIVE_RISE_FRACTION,
             )
 
-            # Candidate must survive one following valid sample. This is the key
-            # guard against noise/spikes being used as the timing reference.
             if candidate is not None:
                 edge_time, candidate_value, candidate_baseline, candidate_floor = candidate
                 confirm_level = max(
+                    MIN_VALID_ON_LX,
                     candidate_baseline + 0.5 * candidate_floor,
                     CONFIRM_FRACTION * candidate_value,
                 )
@@ -130,13 +129,12 @@ def _safe_detect_reference_flash_adaptive(
                     return edge_time, max(candidate_value, value), range_id, gp
                 candidate = None
 
-            # Preferred case: we have explicitly seen the OFF state and now see
-            # a valid positive sample. Otherwise use a conservative baseline rise.
             if saw_off_state:
-                rising = value >= rise_floor
+                rising = value >= max(MIN_VALID_ON_LX, rise_floor)
             else:
                 rising = (
                     last_value is not None
+                    and value >= MIN_VALID_ON_LX
                     and value > last_value
                     and value - baseline >= rise_floor
                 )
@@ -154,8 +152,6 @@ def _safe_detect_reference_flash_adaptive(
         if restart_with_new_range:
             continue
 
-        # Only after an entire range window failed do we try one more-sensitive
-        # range. This prevents an OFF-state ?32 from cascading R5 -> R6 -> R7.
         if range_id < 7:
             range_id += 1
             continue
@@ -171,13 +167,7 @@ def _safe_detect_reference_flash_adaptive(
 
 
 def _verified_synchronized_effective_adaptive(self: P9710, **kwargs):
-    """Acquire MI and reject a clearly missed pulse instead of saving ~zero.
-
-    For the present MIOL workflow a detected flash followed by an MI result below
-    both an absolute floor and 2% of the trigger sample is almost certainly a
-    timing miss. Reacquire the same angular point once from a fresh reference
-    flash. No averaging or interpolation is used.
-    """
+    """Acquire MI and reject a clearly missed pulse instead of saving ~zero."""
 
     last = None
     for attempt in range(2):
