@@ -45,8 +45,12 @@ PROFILE_MIN_MS = 100
 PROFILE_MAX_MS = 3000
 PROFILE_STEP_MS = 100
 
-SPEED_MIN_RPM = 0.5
-SPEED_MAX_RPM = 50.0
+# Keep manual/commissioning motion inside a practical operator range. 3 rpm is
+# the slowest allowed value to avoid accidental extremely long moves; 30 rpm is
+# the current HMI ceiling. The operator can still choose the normal 15-20 rpm
+# working range as required.
+SPEED_MIN_RPM = 3.0
+SPEED_MAX_RPM = 30.0
 SPEED_STEP_RPM = 0.5
 
 # Gamma baseline selected for normal commissioning use.
