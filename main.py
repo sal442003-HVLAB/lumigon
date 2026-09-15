@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from main_window import MainWindow
 from axis_profile_controls import attach_axis_profile_controls
 from motor_control_refinement import attach_motor_control_refinement
+from manual_motion_async import attach_async_manual_motion
 from luxmeter_controls import attach_luxmeter_controls
 from effective_intensity_test import attach_effective_intensity_test
 from p9710_mode_workspace import attach_p9710_mode_workspace
@@ -196,6 +197,7 @@ def main():
     window = MainWindow()
     attach_motor_control_refinement(window)
     attach_axis_profile_controls(window)
+    attach_async_manual_motion(window)
     attach_luxmeter_controls(window)
 
     notice = window.findChild(QLabel, "readOnlyNotice")
