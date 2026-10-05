@@ -163,14 +163,18 @@ def attach_p9710_mode_workspace(window):
     port_combo.setEditable(True)
     port_combo.addItem(DEFAULT_PORT)
     port_combo.setCurrentText(DEFAULT_PORT)
+    port_combo.setFixedWidth(220)
 
     connect_button = QPushButton("Connect P-9710")
+    connect_button.setFixedWidth(180)
     disconnect_button = QPushButton("Disconnect")
+    disconnect_button.setFixedWidth(150)
     connection_status = QLabel("Disconnected")
     connection_status.setStyleSheet("color:#8FA9B9;")
 
     mode_combo = QComboBox()
     mode_combo.addItems(MODE_NAMES)
+    mode_combo.setFixedWidth(320)
 
     header.addWidget(QLabel("Port:"), 0, 0)
     header.addWidget(port_combo, 0, 1)
@@ -179,6 +183,11 @@ def attach_p9710_mode_workspace(window):
     header.addWidget(connection_status, 0, 4, 1, 2)
     header.addWidget(QLabel("Measurement mode:"), 1, 0)
     header.addWidget(mode_combo, 1, 1, 1, 2)
+    header.setColumnStretch(0, 0)
+    header.setColumnStretch(1, 0)
+    header.setColumnStretch(2, 0)
+    header.setColumnStretch(3, 0)
+    header.setColumnStretch(4, 1)
     root.addLayout(header)
 
     stack = QStackedWidget()
@@ -237,10 +246,12 @@ def attach_p9710_mode_workspace(window):
         integration.setSingleStep(10.0)
         integration.setSuffix(" ms")
         integration.setValue(DEFAULT_INTEGRATION_MS)
+        integration.setFixedWidth(150)
 
         range_spin = QSpinBox()
         range_spin.setRange(0, 7)
         range_spin.setValue(DEFAULT_RANGE)
+        range_spin.setFixedWidth(100)
         sync_box = QCheckBox("CW synchronisation")
 
         range_hint = QLabel(_range_interval_text(DEFAULT_RANGE))
@@ -248,7 +259,10 @@ def attach_p9710_mode_workspace(window):
         range_spin.valueChanged.connect(lambda v: range_hint.setText(_range_interval_text(v)))
 
         read_button = QPushButton(f"Read {mode_name}")
+        read_button.setFixedWidth(180)
         reset_button = QPushButton("Reset extrema") if accumulated else None
+        if reset_button is not None:
+            reset_button.setFixedWidth(140)
 
         result = QLabel(f"{mode_name}: —")
         result.setStyleSheet("font-size:16pt; font-weight:700; color:#E7F2F8;")
@@ -279,6 +293,11 @@ def attach_p9710_mode_workspace(window):
         layout.addWidget(p2p_label, 4, 3)
         layout.addWidget(utilization_text, 5, 0, 1, 5)
         layout.addWidget(utilization_bar, 6, 0, 1, 5)
+        layout.setColumnStretch(0, 0)
+        layout.setColumnStretch(1, 0)
+        layout.setColumnStretch(2, 0)
+        layout.setColumnStretch(3, 0)
+        layout.setColumnStretch(4, 1)
         layout.setRowStretch(7, 1)
 
         def finish_worker():
@@ -384,20 +403,24 @@ def attach_p9710_mode_workspace(window):
     period_spin.setDecimals(4)
     period_spin.setSuffix(" s")
     period_spin.setValue(DEFAULT_PERIOD_S)
+    period_spin.setFixedWidth(140)
 
     pre_spin = QSpinBox()
     pre_spin.setRange(0, 5000)
     pre_spin.setSuffix(" ms")
     pre_spin.setValue(DEFAULT_PRETRIGGER_MS)
+    pre_spin.setFixedWidth(120)
 
     window_spin = QSpinBox()
     window_spin.setRange(1, 10000)
     window_spin.setSuffix(" ms")
     window_spin.setValue(DEFAULT_WINDOW_MS)
+    window_spin.setFixedWidth(120)
 
     range_spin = QSpinBox()
     range_spin.setRange(0, 7)
     range_spin.setValue(DEFAULT_RANGE)
+    range_spin.setFixedWidth(100)
     range_hint = QLabel(_range_interval_text(DEFAULT_RANGE))
     range_hint.setStyleSheet("color:#8FA9B9;")
     range_spin.valueChanged.connect(lambda v: range_hint.setText(_range_interval_text(v)))
@@ -407,20 +430,24 @@ def attach_p9710_mode_workspace(window):
     threshold_spin.setDecimals(3)
     threshold_spin.setSuffix(" lx")
     threshold_spin.setValue(DEFAULT_THRESHOLD_LX)
+    threshold_spin.setFixedWidth(140)
 
     c_spin = QDoubleSpinBox()
     c_spin.setRange(0.001, 10.0)
     c_spin.setDecimals(3)
     c_spin.setSuffix(" s")
     c_spin.setValue(DEFAULT_C_S)
+    c_spin.setFixedWidth(120)
 
     distance_spin = QDoubleSpinBox()
     distance_spin.setRange(0.01, 1000.0)
     distance_spin.setDecimals(3)
     distance_spin.setSuffix(" m")
-    distance_spin.setValue(10.0)
+    distance_spin.setValue(5.0)
+    distance_spin.setFixedWidth(120)
 
     e_button = QPushButton("Measure synchronized")
+    e_button.setFixedWidth(190)
     e_result = QLabel("E-effective: —")
     i_result = QLabel("I-effective: —")
     trigger_result = QLabel("Trigger sample: —")
@@ -452,6 +479,10 @@ def attach_p9710_mode_workspace(window):
     egrid.addWidget(trigger_result, 6, 2, 1, 2)
     egrid.addWidget(e_gp_text, 7, 0, 1, 4)
     egrid.addWidget(e_gp_bar, 8, 0, 1, 4)
+    egrid.setColumnStretch(0, 0)
+    egrid.setColumnStretch(1, 0)
+    egrid.setColumnStretch(2, 0)
+    egrid.setColumnStretch(3, 1)
     egrid.setRowStretch(9, 1)
 
     def effective_finished():
