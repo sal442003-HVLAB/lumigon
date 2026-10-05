@@ -230,13 +230,18 @@ def attach_p9710_flash_timing_runtime(window):
 
     box = QGroupBox("Flash Timing Diagnostic")
     grid = QGridLayout(box)
-    grid.setContentsMargins(10, 10, 10, 10)
-    grid.setHorizontalSpacing(12)
-    grid.setVerticalSpacing(7)
+    grid.setContentsMargins(12, 10, 12, 10)
+    grid.setHorizontalSpacing(10)
+    grid.setVerticalSpacing(6)
+    grid.setColumnStretch(0, 0)
+    grid.setColumnStretch(1, 0)
+    grid.setColumnStretch(2, 0)
+    grid.setColumnStretch(3, 1)
 
     range_spin = QSpinBox()
     range_spin.setRange(0, 7)
     range_spin.setValue(DEFAULT_RANGE)
+    range_spin.setFixedWidth(110)
 
     capture_spin = QDoubleSpinBox()
     capture_spin.setRange(5.0, 60.0)
@@ -244,15 +249,23 @@ def attach_p9710_flash_timing_runtime(window):
     capture_spin.setSingleStep(1.0)
     capture_spin.setSuffix(" s")
     capture_spin.setValue(DEFAULT_CAPTURE_S)
+    capture_spin.setFixedWidth(120)
 
     measure_button = QPushButton("Measure period / duration")
+    measure_button.setFixedWidth(220)
     status = QLabel("Ready — use while the lamp is flashing.")
     status.setWordWrap(True)
     status.setStyleSheet("color:#8FA9B9;")
 
-    period_label = QLabel("Period: —")
-    duration_label = QLabel("Optical ON duration: —")
-    duty_label = QLabel("Duty cycle: —")
+    period_label = QLabel("Period\n—")
+    duration_label = QLabel("Optical ON duration\n—")
+    duty_label = QLabel("Duty cycle\n—")
+    for metric_label in (period_label, duration_label, duty_label):
+        metric_label.setMinimumWidth(160)
+        metric_label.setStyleSheet(
+            "background:#14212B; border:1px solid #34495E; border-radius:5px; "
+            "padding:7px 10px; font-weight:700;"
+        )
     detail_label = QLabel("Timing detail: —")
     detail_label.setWordWrap(True)
     note = QLabel(
@@ -268,13 +281,16 @@ def attach_p9710_flash_timing_runtime(window):
     grid.addWidget(range_spin, 0, 1)
     grid.addWidget(QLabel("Capture time:"), 0, 2)
     grid.addWidget(capture_spin, 0, 3)
+
     grid.addWidget(measure_button, 1, 0, 1, 2)
     grid.addWidget(status, 1, 2, 1, 2)
-    grid.addWidget(period_label, 2, 0)
-    grid.addWidget(duration_label, 2, 1)
-    grid.addWidget(duty_label, 2, 2)
-    grid.addWidget(detail_label, 3, 0, 1, 4)
-    grid.addWidget(note, 4, 0, 1, 4)
+
+    grid.addWidget(period_label, 2, 0, 1, 1)
+    grid.addWidget(duration_label, 2, 1, 1, 1)
+    grid.addWidget(duty_label, 2, 2, 1, 1)
+    grid.addWidget(detail_label, 2, 3, 1, 1)
+
+    grid.addWidget(note, 3, 0, 1, 4)
 
     worker_holder = {"worker": None}
 
@@ -294,11 +310,11 @@ def attach_p9710_flash_timing_runtime(window):
         QMessageBox.critical(window, "P-9710 Flash Timing", message)
 
     def completed(result: PulseTimingResult):
-        period_label.setText(f"Period: {result.period_s:.5f} s")
+        period_label.setText(f"Period\n{result.period_s:.5f} s")
         duration_label.setText(
-            f"Optical ON duration: {result.duration_s * 1000.0:.1f} ms"
+            f"Optical ON duration\n{result.duration_s * 1000.0:.1f} ms"
         )
-        duty_label.setText(f"Duty cycle: {result.duty_cycle_pct:.2f}%")
+        duty_label.setText(f"Duty cycle\n{result.duty_cycle_pct:.2f}%")
         detail_label.setText(
             f"{result.pulses} rising edges • median sample interval "
             f"{result.sample_interval_ms:.1f} ms • baseline {result.baseline_lx:.3f} lx • "
