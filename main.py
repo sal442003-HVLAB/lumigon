@@ -19,6 +19,7 @@ from luxmeter_controls import attach_luxmeter_controls
 from effective_intensity_test import attach_effective_intensity_test
 from p9710_mode_workspace import attach_p9710_mode_workspace
 from p9710_continuous_runtime import attach_p9710_continuous_runtime
+from p9710_flash_timing_runtime import attach_p9710_flash_timing_runtime
 from p9710_miol_grid_runtime import attach_p9710_miol_grid_runtime
 from p9710_miol_live_plot import attach_p9710_miol_live_plot
 from p9710_fullscan_safety import install_p9710_fullscan_safety
@@ -213,6 +214,7 @@ def main():
     attach_p9710_mode_workspace(window)
     attach_p9710_continuous_runtime(window)
     attach_luxmeter_workspace_tabs(window)
+    attach_p9710_flash_timing_runtime(window)
 
     attach_results_workspace(window)
     attach_results_preload_refinement(window)
