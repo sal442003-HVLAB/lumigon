@@ -33,6 +33,7 @@ from tabbed_layout import organize_main_window_tabs
 from execution_mode_controls import attach_execution_mode_controls
 from measurement_ui_fixes import attach_measurement_ui_fixes
 from measurement_scroll_runtime import attach_measurement_scroll_runtime
+from luxmeter_scroll_runtime import attach_luxmeter_scroll_runtime
 from measurement_profile_catalog import attach_measurement_profile_catalog
 from measurement_profile_layout import attach_measurement_profile_layout
 from obstacle_profile_workflow import attach_obstacle_profile_workflow
@@ -214,6 +215,7 @@ def main():
     attach_p9710_mode_workspace(window)
     attach_p9710_continuous_runtime(window)
     attach_luxmeter_workspace_tabs(window)
+    attach_luxmeter_scroll_runtime(window)
     attach_p9710_flash_timing_runtime(window)
 
     attach_results_workspace(window)
