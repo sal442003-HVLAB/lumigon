@@ -358,6 +358,8 @@ class MeasurementV2Worker(QThread):
                 )
                 self.current_range_id = range_id
                 return flash
+            except _AbortRequested:
+                raise
             except _RangeOverload:
                 last_error = "P-9710 range overloaded."
                 if range_id <= 0:
