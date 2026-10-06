@@ -8,11 +8,16 @@ needed for the goniophotometric run.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 from PySide6.QtCore import Qt
+from measurement_graph_v2 import CPlaneGraphV2
+from measurement_run import measurement_data_directory
+
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -137,9 +142,40 @@ def build_measurement_workspace_v2(window):
     )
     measurement_mode.setFixedWidth(260)
 
+    save_folder_edit = QLineEdit(str(measurement_data_directory()))
+    save_folder_edit.setMinimumWidth(260)
+
+    browse_folder_button = QPushButton("Browse…")
+    browse_folder_button.setFixedWidth(90)
+
+    folder_row = QWidget()
+    folder_layout = QHBoxLayout(folder_row)
+    folder_layout.setContentsMargins(0, 0, 0, 0)
+    folder_layout.setSpacing(6)
+    folder_layout.addWidget(save_folder_edit, 1)
+    folder_layout.addWidget(browse_folder_button)
+
+    file_name_edit = QLineEdit()
+    file_name_edit.setPlaceholderText("Auto from Sample ID if left blank")
+    file_name_edit.setMaximumWidth(360)
+
+    def choose_save_folder():
+        current = save_folder_edit.text().strip() or str(measurement_data_directory())
+        selected = QFileDialog.getExistingDirectory(
+            page,
+            "Select Measurement Save Folder",
+            current,
+        )
+        if selected:
+            save_folder_edit.setText(selected)
+
+    browse_folder_button.clicked.connect(choose_save_folder)
+
     test_form.addRow("Sample:", sample_id)
     test_form.addRow("Distance:", distance)
     test_form.addRow("Measurement:", measurement_mode)
+    test_form.addRow("File name:", file_name_edit)
+    test_form.addRow("Save folder:", folder_row)
     left.addWidget(test_box)
 
     # End this card immediately after the angular resolution controls.
@@ -254,21 +290,13 @@ def build_measurement_workspace_v2(window):
     # Right: reserved now; later one graph per measured C plane.
     # ==================================================================
     graph_box = QGroupBox("C-plane Graph")
-    graph_box.setMinimumWidth(420)
+    graph_box.setFixedSize(710, 540)
     graph_layout = QVBoxLayout(graph_box)
     graph_layout.setContentsMargins(14, 14, 14, 14)
 
-    graph_placeholder = QLabel(
-        "Reserved for the live C-plane graph\n\n"
-        "Each measured C plane will later show its Gamma profile here."
-    )
-    graph_placeholder.setObjectName("measurementV2GraphPlaceholder")
-    graph_placeholder.setAlignment(Qt.AlignCenter)
-    graph_placeholder.setWordWrap(True)
-    graph_placeholder.setMinimumHeight(360)
-
-    graph_layout.addWidget(graph_placeholder, 1)
-    body.addWidget(graph_box, 4)
+    graph_widget = CPlaneGraphV2(graph_box)
+    graph_layout.addWidget(graph_widget, 0, Qt.AlignCenter)
+    body.addWidget(graph_box, 0, Qt.AlignTop)
 
     root.addLayout(body)
 
@@ -314,6 +342,8 @@ def build_measurement_workspace_v2(window):
     window.measurement_workspace = page
     window.measurement_v2_sample_id_edit = sample_id
     window.measurement_v2_distance_spin = distance
+    window.measurement_v2_file_name_edit = file_name_edit
+    window.measurement_v2_save_folder_edit = save_folder_edit
     window.measurement_v2_mode_combo = measurement_mode
     window.measurement_v2_status_label = status
     window.measurement_v2_set_status = set_status
@@ -326,7 +356,7 @@ def build_measurement_workspace_v2(window):
     window.measurement_v2_summary_label = summary
     window.measurement_v2_start_button = start_button
 
-    window.measurement_v2_graph_placeholder = graph_placeholder
+    window.measurement_v2_graph = graph_widget
 
     page.setStyleSheet(
         """
@@ -360,13 +390,6 @@ def build_measurement_workspace_v2(window):
             border: 1px solid #2B4050;
             border-radius: 5px;
             padding: 9px 11px;
-        }
-        QLabel#measurementV2GraphPlaceholder {
-            color: #718897;
-            background-color: #111B23;
-            border: 1px dashed #34495E;
-            border-radius: 6px;
-            padding: 24px;
         }
         """
     )
