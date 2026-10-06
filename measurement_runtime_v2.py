@@ -802,6 +802,27 @@ def attach_measurement_runtime_v2(window):
         if graph is not None:
             graph.add_point(item)
 
+    def on_progress(payload):
+        dialog = getattr(window, "measurement_v2_progress_dialog", None)
+        if dialog is None:
+            return
+        dialog.update_progress(
+            completed=payload.get("completed", 0),
+            total=payload.get("total", 0),
+            percent=payload.get("percent"),
+            remaining_s=payload.get("remaining_s"),
+        )
+
+    def request_worker_abort():
+        running = holder["worker"]
+        if running is None or not running.isRunning():
+            return
+        running.requestInterruption()
+        start_button.setEnabled(False)
+        status_label.setText(
+            "Abort requested — finishing the current safe operation…"
+        )
+
     def on_completed(payload):
         window.measurement_v2_last_run = payload
         points = len(payload.get("points") or [])
@@ -814,6 +835,11 @@ def attach_measurement_runtime_v2(window):
             "border:1px solid #2C617E; border-radius:5px; "
             "padding:6px 10px; font-weight:700;"
         )
+        dialog = getattr(window, "measurement_v2_progress_dialog", None)
+        if dialog is not None:
+            dialog.finish_success(
+                f"Complete — {points} points measured and saved."
+            )
 
     def on_aborted(message):
         status_label.setText(message)
@@ -822,6 +848,9 @@ def attach_measurement_runtime_v2(window):
             "border:1px solid #2C617E; border-radius:5px; "
             "padding:6px 10px; font-weight:700;"
         )
+        dialog = getattr(window, "measurement_v2_progress_dialog", None)
+        if dialog is not None:
+            dialog.finish_aborted(message)
 
     def on_failed(message):
         status_label.setText("Measurement stopped — error")
@@ -830,17 +859,20 @@ def attach_measurement_runtime_v2(window):
             "border:1px solid #2C617E; border-radius:5px; "
             "padding:6px 10px; font-weight:700;"
         )
+        dialog = getattr(window, "measurement_v2_progress_dialog", None)
+        if dialog is not None:
+            dialog.finish_failed(f"Measurement stopped — {message}")
         QMessageBox.critical(window, "V2 Measurement Error", message)
 
     def start_or_abort():
         running = holder["worker"]
         if running is not None:
             if running.isRunning():
-                running.requestInterruption()
-                start_button.setEnabled(False)
-                status_label.setText(
-                    "Abort requested — finishing the current safe operation…"
-                )
+                dialog = getattr(window, "measurement_v2_progress_dialog", None)
+                if dialog is not None:
+                    dialog.request_abort()
+                else:
+                    request_worker_abort()
             return
 
         problem = precheck()
@@ -981,7 +1013,27 @@ def attach_measurement_runtime_v2(window):
         holder["worker"] = worker
         window.measurement_v2_worker = worker
 
+        previous_dialog = getattr(window, "measurement_v2_progress_dialog", None)
+        if previous_dialog is not None:
+            try:
+                previous_dialog.close()
+                previous_dialog.deleteLater()
+            except Exception:
+                pass
+
+        progress_dialog = MeasurementProgressDialogV2(window)
+        window.measurement_v2_progress_dialog = progress_dialog
+        progress_dialog.abort_requested.connect(request_worker_abort)
+        progress_dialog.begin(
+            total_points=len(points),
+            initial_status=(
+                f"Starting — {len(points)} points • preparing C/Gamma scan"
+            ),
+        )
+
         worker.status.connect(status_label.setText)
+        worker.status.connect(progress_dialog.set_status)
+        worker.progress.connect(on_progress)
         worker.point_accepted.connect(on_point)
         worker.completed.connect(on_completed)
         worker.aborted.connect(on_aborted)
@@ -995,4 +1047,5 @@ def attach_measurement_runtime_v2(window):
     window.measurement_v2_worker = None
     window.measurement_v2_results = []
     window.measurement_v2_last_run = None
+    window.measurement_v2_progress_dialog = None
     return start_button
