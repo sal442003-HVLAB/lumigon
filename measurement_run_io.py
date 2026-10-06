@@ -94,7 +94,7 @@ def _load_p9710_miol_csv(path: Path, rows: list[dict]) -> MeasurementRun:
 
         points.append(
             MeasurementPoint(
-                point=point_id,
+                point=_int(row.get("point")),
                 c_deg=_float(row.get("C_deg")),
                 gamma_deg=_float(row.get("Gamma_deg")),
                 current_na=None,
@@ -271,7 +271,7 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
 
         points.append(
             MeasurementPoint(
-                point=_int(row.get("point")),
+                point=point_id,
                 c_deg=c_deg,
                 gamma_deg=gamma_deg,
                 current_na=None,
