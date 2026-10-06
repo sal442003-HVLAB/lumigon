@@ -24,12 +24,15 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QGroupBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -94,31 +97,35 @@ class VisualizationWorkspaceV2(QWidget):
 
         title = QLabel("Visualization")
         title.setObjectName("visualizationTitle")
-        subtitle = QLabel(
-            "Measured photometric distribution • C × Gamma grid • customer-facing visualization"
-        )
-        subtitle.setObjectName("visualizationSubtitle")
-        subtitle.setWordWrap(True)
         title_block.addWidget(title)
-        title_block.addWidget(subtitle)
         header.addLayout(title_block, 1)
 
-        self.load_button = QPushButton("Load Measurement CSV")
+        self.load_button = QPushButton("Load CSV")
         self.load_button.clicked.connect(self.load_csv)
         header.addWidget(self.load_button)
 
-        self.latest_button = QPushButton("Use Latest Measurement")
+        self.latest_button = QPushButton("Latest Measurement")
         self.latest_button.clicked.connect(self.use_latest_measurement)
         header.addWidget(self.latest_button)
 
-        self.export_button = QPushButton("Export Active Plot")
+        self.export_button = QPushButton("Export Plot")
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self.export_active_plot)
         header.addWidget(self.export_button)
+        self.details_button = QToolButton()
+        self.details_button.setText("Details")
+        self.details_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.details_button.setArrowType(Qt.RightArrow)
+        self.details_button.setCheckable(True)
+        self.details_button.toggled.connect(self._toggle_details)
+        header.addWidget(self.details_button)
         root.addLayout(header)
 
         # Integrity / standard status ---------------------------------
-        status_row = QHBoxLayout()
+        self.details_content = QWidget()
+        self.details_content.setObjectName("visualizationDetails")
+        status_row = QHBoxLayout(self.details_content)
+        status_row.setContentsMargins(0, 0, 0, 0)
         status_row.setSpacing(8)
 
         self.integrity_box = QGroupBox("Data integrity")
@@ -133,6 +140,8 @@ class VisualizationWorkspaceV2(QWidget):
         self.integrity_label.setObjectName("visualizationIntegrityPending")
         self.grid_label = QLabel("—")
         self.quantity_label = QLabel("—")
+        self.grid_label.setWordWrap(True)
+        self.integrity_label.setWordWrap(True)
 
         integrity_layout.addWidget(QLabel("Source:"), 0, 0)
         integrity_layout.addWidget(self.source_label, 0, 1)
@@ -178,13 +187,28 @@ class VisualizationWorkspaceV2(QWidget):
         standard_layout.setColumnStretch(1, 1)
         status_row.addWidget(self.standard_box, 2)
 
-        root.addLayout(status_row)
+        self.details_scroll = QScrollArea()
+        self.details_scroll.setWidgetResizable(True)
+        self.details_scroll.setFrameShape(QFrame.NoFrame)
+        self.details_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.details_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.details_scroll.setMaximumHeight(210)
+        self.details_scroll.setWidget(self.details_content)
+        self.details_scroll.hide()
+        root.addWidget(self.details_scroll)
+
+        self.summary_label = QLabel("Load a measurement to begin. ICAO: not evaluated.")
+        self.summary_label.setObjectName("visualizationSummary")
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setMinimumWidth(0)
+        self.summary_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        root.addWidget(self.summary_label)
 
         # Analysis controls -------------------------------------------
         controls = QHBoxLayout()
         controls.setSpacing(8)
 
-        controls.addWidget(QLabel("Display quantity:"))
+        controls.addWidget(QLabel("Quantity:"))
         self.quantity_combo = QComboBox()
         self.quantity_combo.addItem("Intensity [cd]", "candela")
         self.quantity_combo.addItem("Illuminance [lx]", "lux")
@@ -192,14 +216,23 @@ class VisualizationWorkspaceV2(QWidget):
         controls.addWidget(self.quantity_combo)
 
         self.equal_scale_check = QCheckBox("Equal angular scale")
-        self.equal_scale_check.setChecked(True)
+        self.equal_scale_check.setChecked(False)
+        self.equal_scale_check.setToolTip("Use the same physical length per degree on both axes. Wide scans become narrow strips. Unchecked: expand axes for reading; numeric angles and values are unchanged.")
         self.equal_scale_check.toggled.connect(self._redraw_active)
         controls.addWidget(self.equal_scale_check)
 
-        self.summary_label = QLabel("Load a completed measurement to begin.")
-        self.summary_label.setObjectName("visualizationSummary")
-        self.summary_label.setWordWrap(True)
-        controls.addWidget(self.summary_label, 1)
+        self.nodes_check = QCheckBox("Measured nodes")
+        self.nodes_check.setChecked(False)
+        self.nodes_check.toggled.connect(self._redraw_active)
+        controls.addWidget(self.nodes_check)
+        self.contours_check = QCheckBox("Contours")
+        self.contours_check.setChecked(True)
+        self.contours_check.toggled.connect(self._redraw_active)
+        controls.addWidget(self.contours_check)
+        controls.addStretch(1)
+        status = QLabel("ICAO: NOT EVALUATED")
+        status.setObjectName("visualizationComplianceNotEvaluated")
+        controls.addWidget(status)
 
         root.addLayout(controls)
 
@@ -270,9 +303,32 @@ class VisualizationWorkspaceV2(QWidget):
             QWidget#visualizationWorkspaceV2 {
                 background-color: #101820;
             }
+            QWidget#visualizationDetails, QScrollArea {
+                background-color: #101820;
+            }
+            QToolButton {
+                color: #E8EEF3;
+                background-color: #14212B;
+                border: 1px solid #34495E;
+                border-radius: 5px;
+                padding: 7px 12px;
+            }
+            QToolButton:checked { background-color: #1769AA; }
+            QComboBox {
+                color: #E8EEF3;
+                background-color: #1C2933;
+                border: 1px solid #34495E;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }
+            QComboBox QAbstractItemView {
+                color: #E8EEF3;
+                background-color: #1C2933;
+                selection-background-color: #1769AA;
+            }
             QLabel#visualizationTitle {
                 color: #E9F3FA;
-                font-size: 20pt;
+                font-size: 16pt;
                 font-weight: 700;
             }
             QLabel#visualizationSubtitle {
@@ -299,6 +355,10 @@ class VisualizationWorkspaceV2(QWidget):
             }
             """
         )
+
+    def _toggle_details(self, visible):
+        self.details_scroll.setVisible(visible)
+        self.details_button.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
 
     @staticmethod
     def _configure_canvas(canvas):
@@ -509,8 +569,12 @@ class VisualizationWorkspaceV2(QWidget):
             else "Partial grid — missing cells are never invented"
         )
         self.summary_label.setText(
-            f"{run.sample_id} • {peak_text} • {interpolation_text}"
+            f"{source} • {run.sample_id} • {peak_text}\n"
+            f"{len(c_values)} C × {len(gamma_values)} Gamma • {measured}/{total} nodes • "
+            f"ΔC {_step_text(c_values)} • ΔGamma {_step_text(gamma_values)} • "
+            f"{'Observed grid filled' if complete else 'Partial grid'} • scan completion unverified"
         )
+        self.summary_label.setToolTip(f"{self.grid_label.text()}\n{interpolation_text}\nICAO compliance NOT EVALUATED")
 
     def _quantity_changed(self, *_args):
         self._quantity = self.quantity_combo.currentData() or "candela"
@@ -599,7 +663,7 @@ class VisualizationWorkspaceV2(QWidget):
         colorbar.set_label(f"{quantity} ({unit})", color="#CFDDE6")
         colorbar.ax.tick_params(colors="#B9CAD6")
 
-        # Always expose the actual measured nodes.
+        # Nodes remain available without covering the map by default.
         measured_c = []
         measured_g = []
         for ci, c_deg in enumerate(c_values):
@@ -607,19 +671,12 @@ class VisualizationWorkspaceV2(QWidget):
                 if np.isfinite(matrix[ci, gi]):
                     measured_c.append(c_deg)
                     measured_g.append(gamma_deg)
-        axis.scatter(
-            measured_c,
-            measured_g,
-            s=24,
-            facecolors="none",
-            edgecolors="white",
-            linewidths=0.45,
-            alpha=0.85,
-            clip_on=False,
-        )
+        if self.nodes_check.isChecked():
+            axis.scatter(measured_c, measured_g, s=16, facecolors="none",
+                         edgecolors="white", linewidths=0.45, alpha=0.6, clip_on=False)
 
         complete = int(np.count_nonzero(np.isfinite(matrix))) == int(matrix.size)
-        if complete and len(c_values) >= 2 and len(gamma_values) >= 2:
+        if self.contours_check.isChecked() and complete and len(c_values) >= 2 and len(gamma_values) >= 2:
             finite_values = matrix[np.isfinite(matrix)]
             vmin = float(np.min(finite_values))
             vmax = float(np.max(finite_values))
@@ -634,7 +691,22 @@ class VisualizationWorkspaceV2(QWidget):
                     linewidths=0.9,
                     alpha=0.80,
                 )
-                axis.clabel(contours, inline=True, fontsize=7, fmt="%.4g")
+                # Labels on a very thin equal-scale map overlap vertically.
+                # Keep the contours and legend, and label the expanded view.
+                if not self.equal_scale_check.isChecked():
+                    # Spread labels horizontally rather than stacking every
+                    # intensity label near C=0 on a wide-angle scan.
+                    label_positions = []
+                    fractions = np.linspace(0.18, 0.82, len(levels))
+                    for fraction, segments in zip(fractions, contours.allsegs):
+                        segments = [segment for segment in segments if len(segment)]
+                        if segments:
+                            segment = max(segments, key=len)
+                            target_c = c_values[0] + fraction * (c_values[-1] - c_values[0])
+                            point = segment[np.argmin(np.abs(segment[:, 0] - target_c))]
+                            label_positions.append(tuple(point))
+                    if label_positions:
+                        axis.clabel(contours, inline=True, fontsize=9, fmt="%.4g", manual=label_positions)
 
         # The heatmap cells are centred on nodes. Do not display the half-cell
         # extension as measured coverage beyond the scan's outer nodes.
@@ -648,15 +720,17 @@ class VisualizationWorkspaceV2(QWidget):
         axis.set_xlabel("C angle (°)", color="#CFDDE6")
         axis.set_ylabel("Gamma angle (°)", color="#CFDDE6")
         axis.set_title(
-            f"Isocandela-style measured distribution • {quantity}",
+            f"C × Gamma map • {quantity} [{unit}]",
             color="#E4EEF5",
             fontweight="bold",
         )
         aspect_note = "Equal 1° angular scale" if self.equal_scale_check.isChecked() else "Axes stretched to fit panel"
+        nodes_note = "Circles = measured nodes; " if self.nodes_check.isChecked() else "Node markers hidden; "
+        contour_note = "contours = visual interpolation" if self.contours_check.isChecked() and complete else "contours not shown"
         self.isocandela_figure.text(
             0.03,
             0.025,
-            "Circles = measured nodes; cells = nearest-node display; contours = visual interpolation\nICAO compliance NOT EVALUATED; C/Gamma are instrument angles; " + aspect_note,
+            nodes_note + "cells = nearest-node display; " + contour_note + "\nICAO compliance NOT EVALUATED; C/Gamma are instrument angles; " + aspect_note,
             color="#90A8B8",
             fontsize=8,
             va="bottom",
