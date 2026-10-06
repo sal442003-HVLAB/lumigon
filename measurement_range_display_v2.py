@@ -20,7 +20,9 @@ class MeasurementRangeDisplayV2(QWidget):
         layout.addWidget(self.label)
         layout.addWidget(self.bar)
         self.setToolTip(
-            "Peak GP range utilization, not an uncertainty percentage. "
+            "Range use relative to the operator-observed GP=50 saturation limit: "
+            "use = 100 × raw GP / 50. This is an empirical guard, not an "
+            "uncertainty percentage or a correction to measured lux. "
             "Target 10–90%; 90% is a software ceiling. Below 10%, the safer "
             "range is retained if the next gain would exceed 90%. "
             "GP alone has not been validated against the manufacturer's overload "
@@ -38,9 +40,12 @@ class MeasurementRangeDisplayV2(QWidget):
         phase = payload.get("phase", "")
         range_id = payload.get("range_id")
         prefix = f"R{range_id} • " if range_id is not None else ""
-        number = f"{float(pct):.1f}% peak" if known else "—"
+        raw_gp = payload.get("raw_gp_peak")
+        number = f"{float(pct):.1f}% of limit" if known else "—"
+        if raw_gp is not None:
+            number += f" (GP {float(raw_gp):.1f})"
         captions = {
-            "within_target": "GP within target • overload unverified",
+            "within_target": "Within observed target",
             "low_utilization": "Low use • safer range retained",
             "over_limit": "Above 90% • acquisition rejected",
             "overload": "Overload • acquisition rejected",

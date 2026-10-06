@@ -32,6 +32,8 @@ class MeasurementPoint:
     status: str = "Measured"
     range_utilization_pct: Optional[float] = None
     range_check_status: str = "unverified"
+    range_raw_gp_peak: Optional[float] = None
+    range_gp_saturation_reference: Optional[float] = None
 
     @classmethod
     def from_result(cls, result: dict) -> "MeasurementPoint":

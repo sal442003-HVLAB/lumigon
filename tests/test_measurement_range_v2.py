@@ -59,7 +59,8 @@ class FakeMeter:
         assert self.transactions[-1][0] == "MV", "GP must follow its own MV"
         self.clock.value += 0.01
         capacity = 100.0 * 10.0 ** (5 - self.range_id)
-        value = 100.0 * self.last_value / capacity
+        # Match the observed laboratory behavior: GP plateaus at 50 on overload.
+        value = 50.0 * self.last_value / capacity
         self.transactions.append(("GP", value, self.clock.value))
         if self.trace_callback is not None:
             self.trace_callback("GP", str(value), self.clock.value - .01, self.clock.value)
@@ -249,15 +250,19 @@ def test_success_csv_retains_gp_metadata_and_loader_preserves_status(make_worker
     worker.run()
     assert completed and not failed
     row = completed[0]["points"][0]
-    assert row["schema_version"] == "2.2"
+    assert row["schema_version"] == "2.3"
     assert row["range_peak_utilization_pct"] == 9.5
     assert row["range_precheck_peak_pct"] == 9.5
     assert row["range_acquisition_peak_pct"] == 9.5
     assert row["range_check_count"] > 2
     assert row["range_check_status"] == "low_utilization"
+    assert row["range_raw_gp_peak"] == 4.75
+    assert row["range_gp_saturation_reference"] == 50
     run = load_measurement_run_csv(worker.output_path)
     assert run.points[0].range_utilization_pct == 9.5
     assert run.points[0].range_check_status == "low_utilization"
+    assert run.points[0].range_raw_gp_peak == 4.75
+    assert run.points[0].range_gp_saturation_reference == 50
 
 
 def test_cw_maximum_csv_also_requires_and_preserves_range_checks(make_worker):
@@ -275,6 +280,9 @@ def test_cw_maximum_csv_also_requires_and_preserves_range_checks(make_worker):
     ("range_acquisition_peak_pct", "0"), ("range_check_status", "unverified"),
     ("range_check_count", "1"), ("range_ids", "8"),
     ("range_check_method", "estimated"), ("range_selection_attempts", ""),
+    ("range_raw_gp_peak", "50"), ("range_raw_gp_precheck", "nan"),
+    ("range_raw_gp_acquisition", "-2"), ("range_gp_saturation_reference", "0"),
+    ("range_gp_reference_basis", "manufacturer confirmed"),
 ])
 def test_loader_rejects_invalid_verification_metadata(make_worker, field, value):
     worker, meter = make_worker()
@@ -330,4 +338,46 @@ def test_display_handles_unknown_safe_low_and_over_limit(app):
     assert "rejected" in widget.label.text()
     widget.reset()
     assert "Unverified" in widget.label.text() and widget.bar.value() == 0
+    widget.close()
+
+
+def test_gp_50_plateau_on_both_r6_and_r5_is_rejected(make_worker):
+    worker, meter = make_worker(180, range_id=6)
+    flash = worker._capture_one_flash()
+    assert meter.configurations == [6, 5, 4, 4]
+    assert flash.range_id == 4
+    assert flash.cw_max_lx == 180  # lux is not multiplied by the GP scale
+    assert flash.range_peak_utilization_pct == 18
+    assert any(kind == 'GP' and value == 50 for kind, value, _ in meter.transactions)
+
+
+@pytest.mark.parametrize('raw, expected', [(0, 0), (5, 10), (25, 50), (45, 90), (50, 100)])
+def test_gp_use_is_relative_to_observed_limit(raw, expected):
+    from p9710_range_policy import normalized_range_use
+    assert normalized_range_use(raw) == expected
+
+
+def test_legacy_22_percentages_are_not_reinterpreted(make_worker):
+    worker, meter = make_worker()
+    worker.run()
+    with worker.output_path.open(newline='') as stream:
+        reader = csv.DictReader(stream)
+        fields, rows = reader.fieldnames, list(reader)
+    rows[0]['schema_version'] = '2.2'
+    fields = [f for f in fields if not f.startswith('range_raw_gp_') and f not in {'range_gp_saturation_reference', 'range_gp_reference_basis'}]
+    with worker.output_path.open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields, extrasaction='ignore')
+        writer.writeheader()
+        writer.writerows(rows)
+    point = load_measurement_run_csv(worker.output_path).points[0]
+    assert point.range_utilization_pct == 40
+    assert point.range_gp_saturation_reference is None
+
+
+def test_display_shows_raw_and_observed_limit_percentage_separately(app):
+    widget = MeasurementRangeDisplayV2()
+    widget.update_range({'range_id': 5, 'peak_pct': 100, 'raw_gp_peak': 50, 'state': 'over_limit'})
+    assert '100.0% of limit' in widget.label.text()
+    assert '(GP 50.0)' in widget.label.text()
+    assert 'rejected' in widget.label.text()
     widget.close()

@@ -2,8 +2,14 @@
 
 The range selection uses GP replies paired with the immediately preceding MV,
 with autorange disabled and the same 0.1 ms integration used for acquisition.
-10–90% is an engineering target; 90% is a software acceptance ceiling, not a
-manufacturer specification or an uncertainty estimate. R(n−1) has less gain and
+The operator subsequently observed GP stopping at 50 during known overload in
+both R5 and R6. The lab policy now uses this empirical saturation reference:
+`range use = 100 × abs(raw GP) / 50`. 10–90% of this observed limit is an
+engineering target; the upper ceiling corresponds to raw GP=45, so GP=50 is
+rejected even when no overload error code is emitted. This is not a confirmed
+manufacturer definition, full-scale calibration, or uncertainty estimate.
+The GP zero origin and linearity in unsaturated ranges still need hardware
+validation. R(n−1) has less gain and
 more capacity; R(n+1) has more gain. The decade factor only predicts a candidate:
 the new range is always checked with actual GP readings.
 
@@ -34,10 +40,14 @@ computed effective values. Low use is a warning, not a precision guarantee.
 
 Measurement and its progress popup show range, peak range use, and state. The
 peak display is reset at each capture so dark samples cannot hide a bright peak.
-Accepted V2 CSV schema 2.2 stores the final range, separate precheck/acquisition
-GP peaks, their maximum, GP check count, selection attempt count, method, and
-status. It saves accepted points only. Schema 2.0/2.1 remains loadable but its
-range checks are unverified. Plot exports state whether GP metadata exists.
+Accepted V2 CSV schema 2.3 stores the final range, normalized precheck/acquisition
+peaks, their maximum, raw GP peaks, the reference value and observation basis,
+GP check count, selection attempt count, method, and status. The loader checks
+the raw/normalized relationship. Measured lux, peak illuminance, integral,
+E-effective, and I-effective are NEVER multiplied by the GP normalization.
+It saves accepted points only. Schema 2.0/2.1 remains loadable with unverified
+range checks. Schema 2.2 retains its original GP percentages and is not rescaled.
+Plot exports identify GP metadata and the empirical saturation reference.
 
 ## Hardware discrepancy investigation
 

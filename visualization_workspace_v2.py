@@ -581,7 +581,9 @@ class VisualizationWorkspaceV2(QWidget):
         low = sum(p.range_check_status == "low_utilization" for p in checked)
         if not checked:
             return "Range use: UNVERIFIED (no GP metadata)"
-        return f"Range GP checks: {len(checked)}/{len(self.run.points)} points; {low} below 10%; hardware overload detection unverified"
+        refs = sorted({p.range_gp_saturation_reference for p in checked if p.range_gp_saturation_reference is not None})
+        reference_note = "; observed GP saturation reference " + ", ".join(f"{v:g}" for v in refs) if refs else ""
+        return f"Range GP checks: {len(checked)}/{len(self.run.points)} points; {low} below 10%{reference_note}; hardware overload detection unverified"
 
     def _quantity_changed(self, *_args):
         self._quantity = self.quantity_combo.currentData() or "candela"

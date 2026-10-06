@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from measurement_run import MeasurementPoint, MeasurementRun
+from p9710_range_policy import GP_REFERENCE_BASIS, normalized_range_use
 
 
 def _float_or_none(value):
@@ -184,18 +185,23 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
         )
 
     schema_version = str(first.get("schema_version", "")).strip()
-    if schema_version not in {"2.0", "2.1", "2.2"}:
+    if schema_version not in {"2.0", "2.1", "2.2", "2.3"}:
         raise ValueError(
             f"Unsupported Lumigon Measurement V2 schema: {schema_version or '<blank>'}"
         )
-    if schema_version in {"2.1", "2.2"} and "sample_count" not in first:
+    if schema_version in {"2.1", "2.2", "2.3"} and "sample_count" not in first:
         raise ValueError("Missing V2 column(s): sample_count")
-    if schema_version == "2.2":
+    if schema_version in {"2.2", "2.3"}:
         range_columns = {
             "range_ids", "range_peak_utilization_pct", "range_precheck_peak_pct",
             "range_acquisition_peak_pct", "range_check_status", "range_check_method",
             "range_check_count", "range_selection_attempts",
         }
+        if schema_version == "2.3":
+            range_columns.update({
+                "range_raw_gp_peak", "range_raw_gp_precheck", "range_raw_gp_acquisition",
+                "range_gp_saturation_reference", "range_gp_reference_basis",
+            })
         missing = sorted(range_columns.difference(first))
         if missing:
             raise ValueError("Missing V2 range-check column(s): " + ", ".join(missing))
@@ -314,7 +320,9 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
 
         range_pct = None
         range_status = "unverified"
-        if schema_version == "2.2":
+        raw_gp_peak = None
+        gp_reference = None
+        if schema_version in {"2.2", "2.3"}:
             range_pct = required_number(row, "range_peak_utilization_pct", row_number)
             precheck_pct = required_number(row, "range_precheck_peak_pct", row_number)
             capture_pct = required_number(row, "range_acquisition_peak_pct", row_number)
@@ -334,6 +342,20 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
             if required_number(row, "range_check_count", row_number, integer=True) < 2:
                 raise ValueError(f"Row {row_number}: both precheck and acquisition GP checks are required.")
             required_number(row, "range_selection_attempts", row_number, integer=True)
+            if schema_version == "2.3":
+                gp_reference = required_number(row, "range_gp_saturation_reference", row_number)
+                if (gp_reference <= 0 or gp_reference != _float(first["range_gp_saturation_reference"])
+                        or row["range_gp_reference_basis"] != GP_REFERENCE_BASIS):
+                    raise ValueError(f"Row {row_number}: invalid or mixed empirical GP references.")
+                raw_gp_peak = required_number(row, "range_raw_gp_peak", row_number)
+                for raw_key, expected in (
+                    ("range_raw_gp_peak", range_pct),
+                    ("range_raw_gp_precheck", precheck_pct),
+                    ("range_raw_gp_acquisition", capture_pct),
+                ):
+                    raw = required_number(row, raw_key, row_number)
+                    if raw < 0 or not math.isclose(normalized_range_use(raw, gp_reference), expected, rel_tol=1e-9, abs_tol=1e-9):
+                        raise ValueError(f"Row {row_number}: inconsistent raw GP / normalized range use.")
 
         points.append(
             MeasurementPoint(
@@ -351,6 +373,8 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
                 status="Measured",
                 range_utilization_pct=range_pct,
                 range_check_status=range_status,
+                range_raw_gp_peak=raw_gp_peak,
+                range_gp_saturation_reference=gp_reference,
             )
         )
 

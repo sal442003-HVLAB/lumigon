@@ -30,6 +30,7 @@ from measurement_progress_dialog_v2 import MeasurementProgressDialogV2
 from measurement_run import measurement_data_directory
 from motion_controller import C_AXIS, GAMMA
 from p9710 import P9710Error
+from p9710_range_policy import GP_SATURATION_REFERENCE, GP_REFERENCE_BASIS, normalized_range_use
 
 
 MODE_I_EFFECTIVE = "i_effective"
@@ -328,6 +329,8 @@ class MeasurementV2Worker(QThread):
         self.range_updated.emit({
             "range_id": range_id, "phase": phase,
             "peak_pct": peak_pct, "state": state,
+            "raw_gp_peak": None if peak_pct is None else peak_pct * GP_SATURATION_REFERENCE / 100.0,
+            "gp_reference": GP_SATURATION_REFERENCE,
         })
 
     def _read_checked_gp(self, range_id, phase, previous_peak):
@@ -351,6 +354,9 @@ class MeasurementV2Worker(QThread):
         if not math.isfinite(utilization):
             self._emit_range(range_id, phase, previous_peak, "unverified")
             raise _RangeCheckFailed("Range check failed: GP must be finite.")
+        # GP was observed to stop at 50 under known overload. Normalize only
+        # the guard/display; never multiply measured lux or effective intensity.
+        utilization = normalized_range_use(utilization)
         peak = max(previous_peak, utilization)
         self._emit_range(
             range_id, phase, peak,
@@ -670,6 +676,11 @@ class MeasurementV2Worker(QThread):
                 "range_peak_utilization_pct",
                 "range_precheck_peak_pct",
                 "range_acquisition_peak_pct",
+                "range_raw_gp_peak",
+                "range_raw_gp_precheck",
+                "range_raw_gp_acquisition",
+                "range_gp_saturation_reference",
+                "range_gp_reference_basis",
                 "range_check_status",
                 "range_check_method",
                 "range_check_count",
@@ -758,7 +769,7 @@ class MeasurementV2Worker(QThread):
 
                     result = {
                         "lumigon_format": "Lumigon Measurement V2",
-                        "schema_version": "2.2",
+                        "schema_version": "2.3",
                         "sample_id": self.sample_id,
                         "sample_count": 1,
                         "run_started_at": started.isoformat(),
@@ -779,6 +790,11 @@ class MeasurementV2Worker(QThread):
                         "range_peak_utilization_pct": flash.range_peak_utilization_pct,
                         "range_precheck_peak_pct": flash.range_precheck_peak_pct,
                         "range_acquisition_peak_pct": flash.range_acquisition_peak_pct,
+                        "range_raw_gp_peak": flash.range_peak_utilization_pct * GP_SATURATION_REFERENCE / 100.0,
+                        "range_raw_gp_precheck": flash.range_precheck_peak_pct * GP_SATURATION_REFERENCE / 100.0,
+                        "range_raw_gp_acquisition": flash.range_acquisition_peak_pct * GP_SATURATION_REFERENCE / 100.0,
+                        "range_gp_saturation_reference": GP_SATURATION_REFERENCE,
+                        "range_gp_reference_basis": GP_REFERENCE_BASIS,
                         "range_check_status": flash.range_check_status,
                         "range_check_method": "GP precheck + acquisition extrema",
                         "range_check_count": flash.range_check_count,
