@@ -431,10 +431,11 @@ class VisualizationWorkspaceV2(QWidget):
         )
 
         self.integrity_label.setObjectName("visualizationIntegrityValid")
+        strict_v2 = "validated Lumigon V2 CSV" in (run.home_status or "")
         self.integrity_label.setText(
-            "VALIDATED ✓"
-            if self._source_path is not None
-            else "SESSION DATA"
+            "V2 INTEGRITY CHECK PASSED ✓"
+            if strict_v2
+            else ("LOADED ✓" if self._source_path is not None else "SESSION DATA")
         )
         self.integrity_label.style().unpolish(self.integrity_label)
         self.integrity_label.style().polish(self.integrity_label)
@@ -469,7 +470,7 @@ class VisualizationWorkspaceV2(QWidget):
             f"{run.sample_id} • {peak_text} • {interpolation_text}"
         )
 
-    def _quantity_changed(self):
+    def _quantity_changed(self, *_args):
         self._quantity = self.quantity_combo.currentData() or "candela"
         if self.run is None:
             return
@@ -638,12 +639,20 @@ class VisualizationWorkspaceV2(QWidget):
             color="#E4EEF5",
             fontweight="bold",
         )
+        axis.text2D(
+            0.01,
+            0.01,
+            "Visualization only • ICAO compliance NOT EVALUATED",
+            transform=axis.transAxes,
+            color="#90A8B8",
+            fontsize=8,
+        )
         self.surface_figure.subplots_adjust(
             left=0.02, right=0.97, bottom=0.04, top=0.90
         )
         self.surface_canvas.draw_idle()
 
-    def _draw_cplane(self):
+    def _draw_cplane(self, *_args):
         if self._grid is None or self.cplane_combo.count() == 0:
             self._clear_figure(
                 self.cplane_figure,
@@ -680,6 +689,15 @@ class VisualizationWorkspaceV2(QWidget):
             f"C-plane {c_values[ci]:+.3f}° • measured nodes",
             color="#E4EEF5",
             fontweight="bold",
+        )
+        axis.text(
+            0.01,
+            0.01,
+            "Visualization only • ICAO compliance NOT EVALUATED",
+            transform=axis.transAxes,
+            color="#90A8B8",
+            fontsize=8,
+            va="bottom",
         )
         self.cplane_figure.subplots_adjust(
             left=0.10, right=0.97, bottom=0.15, top=0.87
