@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 
-from measurement_workspace import build_measurement_workspace
+from measurement_workspace_v2 import build_measurement_workspace_v2
 
 
 HEADER_HEIGHT = 100
@@ -333,7 +333,7 @@ def organize_main_window_tabs(window):
     # Measurement: profile-driven test definition and plan preview.
     # No axis movement is connected in this first stage.
     # ------------------------------------------------------------------
-    measurement_tab = build_measurement_workspace(window)
+    measurement_tab = build_measurement_workspace_v2(window)
 
     results_tab = _placeholder_tab(
         "Results",
