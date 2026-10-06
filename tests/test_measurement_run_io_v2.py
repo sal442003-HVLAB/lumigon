@@ -127,3 +127,67 @@ def test_v2_loader_rejects_non_finite_coordinates(tmp_path):
 
     with pytest.raises(ValueError, match="must be finite"):
         load_measurement_run_csv(path)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("c_deg", ""), ("gamma_deg", ""), ("point", ""),
+    ("point", "1.5"), ("point", "0"), ("sample_count", "2.5"),
+    ("sample_count", ""), ("run_started_at", ""),
+])
+def test_v2_rejects_missing_or_invalid_required_values(tmp_path, field, value):
+    row = _row(1, 0, 0, 20)
+    row[field] = value
+    path = tmp_path / "invalid.csv"
+    _write(path, [row])
+    with pytest.raises(ValueError):
+        load_measurement_run_csv(path)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("run_started_at", "2026-10-06T10:01:00+03:30"),
+    ("sample_count", "2"), ("schema_version", "2.0"),
+    ("mode", "cw_maximum"), ("distance_m", "6"),
+    ("sample_id", "OTHER"), ("point", "1"),
+])
+def test_v2_rejects_mixed_run_metadata(tmp_path, field, value):
+    rows = [_row(1, 0, 0, 20), _row(2, 0, 1, 21)]
+    rows[1][field] = value
+    path = tmp_path / "mixed.csv"
+    _write(path, rows)
+    with pytest.raises(ValueError):
+        load_measurement_run_csv(path)
+
+
+def test_v2_rejects_relation_overflow(tmp_path):
+    row = _row(1, 0, 0, 20)
+    row.update(distance_m="1e200", accepted_e_effective_lx="1e200", accepted_i_effective_cd="1")
+    path = tmp_path / "overflow.csv"
+    _write(path, [row])
+    with pytest.raises(ValueError, match="overflowed"):
+        load_measurement_run_csv(path)
+
+
+def test_v2_rejects_duplicate_headers_and_truncated_rows(tmp_path):
+    path = tmp_path / "bad.csv"
+    _write(path, [_row(1, 0, 0, 20)])
+    text = path.read_text()
+    header, row = text.splitlines()
+    path.write_text(header + ",point\n" + row + ",2\n")
+    with pytest.raises(ValueError, match="Duplicate CSV column"):
+        load_measurement_run_csv(path)
+    path.write_text(header + "\n" + row.rsplit(",", 1)[0] + "\n")
+    with pytest.raises(ValueError, match="row length"):
+        load_measurement_run_csv(path)
+
+
+def test_schema_20_preserves_three_sample_count(tmp_path):
+    row = _row(1, 0, 0, 20)
+    row.update(schema_version="2.0", sample_2="20", sample_3="20")
+    row.pop("sample_count")
+    path = tmp_path / "v20.csv"
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=[f for f in FIELDS if f != "sample_count"])
+        writer.writeheader()
+        writer.writerow(row)
+    run = load_measurement_run_csv(path)
+    assert run.samples == run.points[0].samples == 3

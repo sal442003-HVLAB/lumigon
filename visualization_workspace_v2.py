@@ -9,13 +9,17 @@ to issue a PASS/FAIL decision.
 from __future__ import annotations
 
 import math
+import hashlib
+import re
 from pathlib import Path
 
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGridLayout,
@@ -46,12 +50,9 @@ def _finite(value):
     return value if math.isfinite(value) else None
 
 
-def _unique_sorted(values, tolerance=1e-7):
-    result = []
-    for value in sorted(float(v) for v in values):
-        if not result or abs(value - result[-1]) > tolerance:
-            result.append(value)
-    return result
+def _unique_sorted(values):
+    # Do not merge or move measured coordinates using a display tolerance.
+    return sorted(set(float(v) for v in values))
 
 
 def _step_text(values):
@@ -76,6 +77,7 @@ class VisualizationWorkspaceV2(QWidget):
         self._source_path: Path | None = None
         self._quantity = "candela"
         self._grid = None
+        self._source_sha256 = None
 
         self.setObjectName("visualizationWorkspaceV2")
         self.setMinimumSize(0, 0)
@@ -184,10 +186,15 @@ class VisualizationWorkspaceV2(QWidget):
 
         controls.addWidget(QLabel("Display quantity:"))
         self.quantity_combo = QComboBox()
-        self.quantity_combo.addItem("I-effective [cd]", "candela")
-        self.quantity_combo.addItem("E-effective / illuminance [lx]", "lux")
+        self.quantity_combo.addItem("Intensity [cd]", "candela")
+        self.quantity_combo.addItem("Illuminance [lx]", "lux")
         self.quantity_combo.currentIndexChanged.connect(self._quantity_changed)
         controls.addWidget(self.quantity_combo)
+
+        self.equal_scale_check = QCheckBox("Equal angular scale")
+        self.equal_scale_check.setChecked(True)
+        self.equal_scale_check.toggled.connect(self._redraw_active)
+        controls.addWidget(self.equal_scale_check)
 
         self.summary_label = QLabel("Load a completed measurement to begin.")
         self.summary_label.setObjectName("visualizationSummary")
@@ -239,6 +246,22 @@ class VisualizationWorkspaceV2(QWidget):
         self._configure_canvas(self.cplane_canvas)
         cplane_root.addWidget(self.cplane_canvas, 1)
         self.tabs.addTab(self.cplane_page, "C-plane")
+
+        self.gplane_page = QWidget()
+        gplane_root = QVBoxLayout(self.gplane_page)
+        gplane_root.setContentsMargins(0, 0, 0, 0)
+        gplane_controls = QHBoxLayout()
+        gplane_controls.addWidget(QLabel("Fixed Gamma:"))
+        self.gplane_combo = QComboBox()
+        self.gplane_combo.currentIndexChanged.connect(self._draw_gplane)
+        gplane_controls.addWidget(self.gplane_combo)
+        gplane_controls.addStretch(1)
+        gplane_root.addLayout(gplane_controls)
+        self.gplane_figure = Figure(figsize=(8.4, 5.0))
+        self.gplane_canvas = FigureCanvasQTAgg(self.gplane_figure)
+        self._configure_canvas(self.gplane_canvas)
+        gplane_root.addWidget(self.gplane_canvas, 1)
+        self.tabs.addTab(self.gplane_page, "Fixed Gamma")
 
         self._clear_all("No measurement loaded")
 
@@ -297,34 +320,47 @@ class VisualizationWorkspaceV2(QWidget):
         return _finite(point.lux)
 
     def _quantity_descriptor(self):
+        effective = self.run is not None and (
+            self.run.product == "Lumigon V2" and self.run.profile == "E-effective → I-effective"
+        )
         if self._quantity == "candela":
-            return "I-effective", "cd"
+            return ("I-effective" if effective else "Luminous intensity"), "cd"
         if self.run is not None and "CW maximum" in (self.run.profile or ""):
             return "CW maximum", "lx"
-        return "E-effective", "lx"
+        return ("E-effective" if effective else "Illuminance"), "lx"
 
-    def _build_grid(self):
-        if self.run is None:
+    def _build_grid(self, run=None, quantity=None):
+        run = run or self.run
+        quantity = quantity or self._quantity
+        if run is None:
             return None
 
         usable = []
-        for point in self.run.points:
-            value = self._quantity_value(point)
-            if value is not None:
-                usable.append((float(point.c_deg), float(point.gamma_deg), value))
+        coordinates = set()
+        for point in run.points:
+            c_deg, gamma_deg = _finite(point.c_deg), _finite(point.gamma_deg)
+            if c_deg is None or gamma_deg is None:
+                raise ValueError("C/Gamma coordinates must be finite numbers.")
+            coordinate = (c_deg, gamma_deg)
+            if coordinate in coordinates:
+                raise ValueError(f"Duplicate visualization coordinate at C={c_deg:g}°, Gamma={gamma_deg:g}°.")
+            coordinates.add(coordinate)
+            value = _finite(point.candela_cd if quantity == "candela" else point.lux)
+            # Keep axes even when an entire measured plane lacks this quantity.
+            usable.append((c_deg, gamma_deg, np.nan if value is None else value))
 
         if not usable:
             return None
 
         c_values = _unique_sorted(item[0] for item in usable)
         gamma_values = _unique_sorted(item[1] for item in usable)
-        c_index = {round(value, 8): idx for idx, value in enumerate(c_values)}
-        g_index = {round(value, 8): idx for idx, value in enumerate(gamma_values)}
+        c_index = {value: idx for idx, value in enumerate(c_values)}
+        g_index = {value: idx for idx, value in enumerate(gamma_values)}
         matrix = np.full((len(c_values), len(gamma_values)), np.nan, dtype=float)
 
         for c_deg, gamma_deg, value in usable:
-            ci = c_index[round(c_deg, 8)]
-            gi = g_index[round(gamma_deg, 8)]
+            ci = c_index[c_deg]
+            gi = g_index[gamma_deg]
             if np.isfinite(matrix[ci, gi]):
                 raise ValueError(
                     f"Duplicate visualization coordinate at C={c_deg:g}°, "
@@ -381,11 +417,19 @@ class VisualizationWorkspaceV2(QWidget):
         self.load_path(path, show_errors=True)
 
     def set_run(self, run: MeasurementRun, *, source_path=None):
+        has_candela = any(_finite(point.candela_cd) is not None for point in run.points)
+        quantity = "candela" if has_candela else "lux"
+        # Validate before replacing the current plot/export state.
+        grid = self._build_grid(run, quantity)
+        if grid is None or not np.any(np.isfinite(grid[2])):
+            raise ValueError("No finite photometric measurement values are available.")
+        source = Path(source_path) if source_path else run.csv_path
+        digest = hashlib.sha256(source.read_bytes()).hexdigest() if source and source.is_file() else None
         self.run = run
-        self._source_path = Path(source_path) if source_path else run.csv_path
+        self._source_path = source
+        self._source_sha256 = digest
 
         # Prefer candela when available, otherwise illuminance.
-        has_candela = any(_finite(point.candela_cd) is not None for point in run.points)
         target_index = self.quantity_combo.findData("candela" if has_candela else "lux")
         if target_index >= 0:
             self.quantity_combo.blockSignals(True)
@@ -393,16 +437,14 @@ class VisualizationWorkspaceV2(QWidget):
             self.quantity_combo.blockSignals(False)
         self._quantity = self.quantity_combo.currentData() or "candela"
 
-        try:
-            self._grid = self._build_grid()
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "Visualization Data Error",
-                str(exc),
-            )
-            self._grid = None
-            return
+        self._grid = grid
+
+        for i, key in enumerate(("candela", "lux")):
+            previous_quantity = self._quantity
+            self._quantity = key
+            label, unit = self._quantity_descriptor()
+            self.quantity_combo.setItemText(i, f"{label} [{unit}]")
+            self._quantity = previous_quantity
 
         self._populate_cplanes()
         self._update_metadata()
@@ -433,7 +475,7 @@ class VisualizationWorkspaceV2(QWidget):
         self.integrity_label.setObjectName("visualizationIntegrityValid")
         strict_v2 = "validated Lumigon V2 CSV" in (run.home_status or "")
         self.integrity_label.setText(
-            "V2 INTEGRITY CHECK PASSED ✓"
+            "V2 FORMAT / ARITHMETIC CHECK PASSED ✓"
             if strict_v2
             else ("LOADED ✓" if self._source_path is not None else "SESSION DATA")
         )
@@ -455,14 +497,14 @@ class VisualizationWorkspaceV2(QWidget):
             ci, gi = np.unravel_index(max_index, matrix.shape)
             peak = float(matrix[ci, gi])
             peak_text = (
-                f"Peak {peak:.3f} {unit} at C {c_values[ci]:+.2f}°, "
+                f"Measured peak {peak:.6g} {unit} at C {c_values[ci]:+.2f}°, "
                 f"Gamma {gamma_values[gi]:+.2f}°"
             )
         else:
             peak_text = "No finite photometric values"
 
         interpolation_text = (
-            "Complete measured grid"
+            "All observed grid intersections have values (scan completion unverified)"
             if complete
             else "Partial grid — missing cells are never invented"
         )
@@ -480,7 +522,9 @@ class VisualizationWorkspaceV2(QWidget):
             QMessageBox.critical(self, "Visualization Data Error", str(exc))
             return
         self._update_metadata()
+        self._populate_cplanes()
         self._draw_all()
+        self.export_button.setEnabled(self._grid is not None and np.any(np.isfinite(self._grid[2])))
 
     def _populate_cplanes(self):
         self.cplane_combo.blockSignals(True)
@@ -493,6 +537,15 @@ class VisualizationWorkspaceV2(QWidget):
                     self.cplane_combo.addItem(f"C {value:+.3f}°", float(value))
                 self.cplane_combo.setCurrentIndex(zero_index)
         self.cplane_combo.blockSignals(False)
+        self.gplane_combo.blockSignals(True)
+        self.gplane_combo.clear()
+        if self._grid is not None:
+            gamma_values = self._grid[1]
+            for value in gamma_values:
+                self.gplane_combo.addItem(f"Gamma {value:+.3f}°", float(value))
+            if gamma_values:
+                self.gplane_combo.setCurrentIndex(min(range(len(gamma_values)), key=lambda i: abs(gamma_values[i])))
+        self.gplane_combo.blockSignals(False)
 
     def _clear_figure(self, figure, canvas, message):
         figure.clear()
@@ -512,6 +565,7 @@ class VisualizationWorkspaceV2(QWidget):
         self._clear_figure(self.isocandela_figure, self.isocandela_canvas, message)
         self._clear_figure(self.surface_figure, self.surface_canvas, message)
         self._clear_figure(self.cplane_figure, self.cplane_canvas, message)
+        self._clear_figure(self.gplane_figure, self.gplane_canvas, message)
 
     def _draw_all(self):
         if self._grid is None:
@@ -520,6 +574,7 @@ class VisualizationWorkspaceV2(QWidget):
         self._draw_isocandela()
         self._draw_surface()
         self._draw_cplane()
+        self._draw_gplane()
 
     def _draw_isocandela(self):
         c_values, gamma_values, matrix = self._grid
@@ -537,7 +592,10 @@ class VisualizationWorkspaceV2(QWidget):
             z,
             shading="nearest",
         )
-        colorbar = self.isocandela_figure.colorbar(mesh, ax=axis, pad=0.02)
+        # Keep the legend alongside the actual map when equal angular scaling
+        # makes a wide scan occupy only a narrow horizontal strip.
+        colorbar_axis = make_axes_locatable(axis).append_axes("right", size="3%", pad=0.12)
+        colorbar = self.isocandela_figure.colorbar(mesh, cax=colorbar_axis)
         colorbar.set_label(f"{quantity} ({unit})", color="#CFDDE6")
         colorbar.ax.tick_params(colors="#B9CAD6")
 
@@ -552,11 +610,12 @@ class VisualizationWorkspaceV2(QWidget):
         axis.scatter(
             measured_c,
             measured_g,
-            s=12,
+            s=24,
             facecolors="none",
             edgecolors="white",
             linewidths=0.45,
-            alpha=0.65,
+            alpha=0.85,
+            clip_on=False,
         )
 
         complete = int(np.count_nonzero(np.isfinite(matrix))) == int(matrix.size)
@@ -571,10 +630,20 @@ class VisualizationWorkspaceV2(QWidget):
                     np.asarray(gamma_values, dtype=float),
                     matrix.T,
                     levels=levels,
+                    colors="#FFFFFF",
                     linewidths=0.9,
                     alpha=0.80,
                 )
-                axis.clabel(contours, inline=True, fontsize=7, fmt="%.0f")
+                axis.clabel(contours, inline=True, fontsize=7, fmt="%.4g")
+
+        # The heatmap cells are centred on nodes. Do not display the half-cell
+        # extension as measured coverage beyond the scan's outer nodes.
+        if len(c_values) > 1:
+            axis.set_xlim(c_values[0], c_values[-1])
+        if len(gamma_values) > 1:
+            axis.set_ylim(gamma_values[0], gamma_values[-1])
+        if self.equal_scale_check.isChecked():
+            axis.set_aspect("equal", adjustable="box")
 
         axis.set_xlabel("C angle (°)", color="#CFDDE6")
         axis.set_ylabel("Gamma angle (°)", color="#CFDDE6")
@@ -583,17 +652,18 @@ class VisualizationWorkspaceV2(QWidget):
             color="#E4EEF5",
             fontweight="bold",
         )
-        axis.text(
-            0.01,
-            0.01,
-            "White circles = measured nodes • contour lines are visual interpolation only",
-            transform=axis.transAxes,
+        aspect_note = "Equal 1° angular scale" if self.equal_scale_check.isChecked() else "Axes stretched to fit panel"
+        self.isocandela_figure.text(
+            0.03,
+            0.025,
+            "Circles = measured nodes; cells = nearest-node display; contours = visual interpolation\nICAO compliance NOT EVALUATED; C/Gamma are instrument angles; " + aspect_note,
             color="#90A8B8",
             fontsize=8,
             va="bottom",
+            bbox={"facecolor": "#101820", "alpha": 0.9, "edgecolor": "none", "pad": 3},
         )
         self.isocandela_figure.subplots_adjust(
-            left=0.09, right=0.92, bottom=0.14, top=0.88
+            left=0.09, right=0.92, bottom=0.17, top=0.86
         )
         self.isocandela_canvas.draw_idle()
 
@@ -605,6 +675,9 @@ class VisualizationWorkspaceV2(QWidget):
         self.surface_figure.patch.set_facecolor("#101820")
         axis = self.surface_figure.add_subplot(111, projection="3d")
         axis.set_facecolor("#101820")
+        axis.tick_params(colors="#B9CAD6")
+        for component in (axis.xaxis, axis.yaxis, axis.zaxis):
+            component.set_pane_color((0.07, 0.11, 0.14, 1.0))
 
         c_mesh, g_mesh = np.meshgrid(
             np.asarray(c_values, dtype=float),
@@ -622,33 +695,26 @@ class VisualizationWorkspaceV2(QWidget):
                 antialiased=True,
                 alpha=0.90,
             )
-        else:
-            mask = np.isfinite(matrix)
-            axis.scatter(
-                c_mesh[mask],
-                g_mesh[mask],
-                matrix[mask],
-                s=24,
-            )
+        mask = np.isfinite(matrix)
+        axis.scatter(c_mesh[mask], g_mesh[mask], matrix[mask], s=16, color="#E6F0F7")
 
-        axis.set_xlabel("C angle (°)")
-        axis.set_ylabel("Gamma angle (°)")
-        axis.set_zlabel(f"{quantity} ({unit})")
+        axis.set_xlabel("C angle (°)", color="#CFDDE6")
+        axis.set_ylabel("Gamma angle (°)", color="#CFDDE6")
+        axis.set_zlabel(f"{quantity} ({unit})", color="#CFDDE6")
         axis.set_title(
             f"Measured C × Gamma distribution • {quantity}",
             color="#E4EEF5",
             fontweight="bold",
         )
-        axis.text2D(
-            0.01,
-            0.01,
-            "Visualization only • ICAO compliance NOT EVALUATED",
-            transform=axis.transAxes,
+        self.surface_figure.text(
+            0.03,
+            0.025,
+            "Dots = measured nodes; surface = visual interpolation\nICAO compliance NOT EVALUATED; C/Gamma are instrument angles",
             color="#90A8B8",
             fontsize=8,
         )
         self.surface_figure.subplots_adjust(
-            left=0.02, right=0.97, bottom=0.04, top=0.90
+            left=0.00, right=0.90, bottom=0.17, top=0.86
         )
         self.surface_canvas.draw_idle()
 
@@ -667,7 +733,6 @@ class VisualizationWorkspaceV2(QWidget):
             return
         ci = min(range(len(c_values)), key=lambda i: abs(c_values[i] - float(selected)))
         values = matrix[ci, :]
-        mask = np.isfinite(values)
 
         quantity, unit = self._quantity_descriptor()
         self.cplane_figure.clear()
@@ -676,8 +741,8 @@ class VisualizationWorkspaceV2(QWidget):
         self._style_axis(axis)
 
         axis.plot(
-            np.asarray(gamma_values, dtype=float)[mask],
-            values[mask],
+            np.asarray(gamma_values, dtype=float),
+            values,
             marker="o",
             linewidth=2.0,
             markersize=4.5,
@@ -693,7 +758,7 @@ class VisualizationWorkspaceV2(QWidget):
         axis.text(
             0.01,
             0.01,
-            "Visualization only • ICAO compliance NOT EVALUATED",
+            "Markers = measured nodes; connecting lines = visual interpolation\nICAO compliance NOT EVALUATED",
             transform=axis.transAxes,
             color="#90A8B8",
             fontsize=8,
@@ -704,6 +769,26 @@ class VisualizationWorkspaceV2(QWidget):
         )
         self.cplane_canvas.draw_idle()
 
+    def _draw_gplane(self, *_args):
+        if self._grid is None or not self.gplane_combo.count():
+            self._clear_figure(self.gplane_figure, self.gplane_canvas, "No fixed Gamma data")
+            return
+        c_values, gamma_values, matrix = self._grid
+        selected = self.gplane_combo.currentData()
+        gi = gamma_values.index(float(selected))
+        quantity, unit = self._quantity_descriptor()
+        self.gplane_figure.clear()
+        self.gplane_figure.patch.set_facecolor("#101820")
+        axis = self.gplane_figure.add_subplot(111)
+        self._style_axis(axis)
+        axis.plot(c_values, matrix[:, gi], marker="o", linewidth=2, markersize=4.5)
+        axis.set_xlabel("C angle (°)", color="#CFDDE6")
+        axis.set_ylabel(f"{quantity} ({unit})", color="#CFDDE6")
+        axis.set_title(f"Fixed Gamma {gamma_values[gi]:+.3f}° • measured nodes", color="#E4EEF5", fontweight="bold")
+        axis.text(0.01, 0.01, "Markers = measured nodes; connecting lines = visual interpolation\nICAO compliance NOT EVALUATED", transform=axis.transAxes, color="#90A8B8", fontsize=8, va="bottom")
+        self.gplane_figure.subplots_adjust(left=0.10, right=0.97, bottom=0.15, top=0.87)
+        self.gplane_canvas.draw_idle()
+
     def _redraw_active(self, *_args):
         if self._grid is None:
             return
@@ -712,6 +797,8 @@ class VisualizationWorkspaceV2(QWidget):
             self._draw_surface()
         elif index == 2:
             self._draw_cplane()
+        elif index == 3:
+            self._draw_gplane()
         else:
             self._draw_isocandela()
 
@@ -721,7 +808,30 @@ class VisualizationWorkspaceV2(QWidget):
             return self.surface_figure
         if index == 2:
             return self.cplane_figure
+        if index == 3:
+            return self.gplane_figure
         return self.isocandela_figure
+
+    def save_active_plot(self, filename):
+        """Export with sample/source context on every independently shared plot."""
+        if self.run is None or self._grid is None or not np.any(np.isfinite(self._grid[2])):
+            raise ValueError("No finite measurement data to export.")
+        if self._source_sha256 and self._source_path:
+            current = hashlib.sha256(self._source_path.read_bytes()).hexdigest()
+            if current != self._source_sha256:
+                raise ValueError("Source CSV has changed since loading. Reload it before exporting.")
+        figure = self.active_figure()
+        run = self.run
+        source = self._source_path.name if self._source_path else "Session data"
+        header = figure.text(0.02, 0.985, f"Lumigon | Sample: {run.sample_id} | Distance: {run.distance_m:g} m\nStart: {run.started_at.isoformat(timespec='seconds')} | Source: {source}", color="#CFDDE6", fontsize=8, va="top")
+        c, g, matrix = self._grid
+        coverage = f"Finite nodes: {np.isfinite(matrix).sum()}/{matrix.size} | ΔC {_step_text(c)} | ΔGamma {_step_text(g)}"
+        footer = figure.text(0.02, -0.01, coverage + " | Scan completion unverified\n" + (f"Source SHA-256: {self._source_sha256}" if self._source_sha256 else "Source file checksum unavailable"), color="#90A8B8", fontsize=7, va="top")
+        try:
+            figure.savefig(filename, dpi=220, bbox_inches="tight")
+        finally:
+            header.remove()
+            footer.remove()
 
     def export_active_plot(self):
         if self.run is None or self._grid is None:
@@ -734,9 +844,11 @@ class VisualizationWorkspaceV2(QWidget):
         )
         directory.mkdir(parents=True, exist_ok=True)
 
-        view_name = ("isocandela", "3d", "cplane")[self.tabs.currentIndex()]
-        quantity_name = "I_effective" if self._quantity == "candela" else "E_effective"
-        default = directory / f"{self.run.sample_id}_{quantity_name}_{view_name}.png"
+        view_name = ("isocandela", "3d", "cplane", "fixed_gamma")[self.tabs.currentIndex()]
+        label, _ = self._quantity_descriptor()
+        quantity_name = re.sub(r"[^A-Za-z0-9]+", "_", label).strip("_")
+        sample_name = re.sub(r"[^A-Za-z0-9._-]+", "_", self.run.sample_id).strip("._-") or "sample"
+        default = directory / f"{sample_name}_{quantity_name}_{view_name}.png"
 
         filename, _ = QFileDialog.getSaveFileName(
             self,
@@ -748,7 +860,7 @@ class VisualizationWorkspaceV2(QWidget):
             return
 
         try:
-            self.active_figure().savefig(filename, dpi=220, bbox_inches="tight")
+            self.save_active_plot(filename)
         except Exception as exc:
             QMessageBox.critical(
                 self,

@@ -161,6 +161,21 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
     """Load the Version 2 Measurement CSV with strict integrity checks."""
 
     first = rows[0]
+    required = {
+        "lumigon_format", "schema_version", "sample_id", "run_started_at",
+        "point", "c_deg", "gamma_deg", "mode", "distance_m",
+    }
+    missing = sorted(required.difference(first))
+    if missing:
+        raise ValueError("Missing V2 column(s): " + ", ".join(missing))
+
+    def required_number(row, key, row_number, *, integer=False):
+        value = _float_or_none(row.get(key))
+        if value is None or not math.isfinite(value):
+            raise ValueError(f"Row {row_number}: {key} must be finite and nonblank.")
+        if integer and (value < 1 or not value.is_integer()):
+            raise ValueError(f"Row {row_number}: {key} must be a positive integer.")
+        return int(value) if integer else value
     format_name = str(first.get("lumigon_format", "")).strip()
     if format_name != "Lumigon Measurement V2":
         raise ValueError(
@@ -173,6 +188,8 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
         raise ValueError(
             f"Unsupported Lumigon Measurement V2 schema: {schema_version or '<blank>'}"
         )
+    if schema_version == "2.1" and "sample_count" not in first:
+        raise ValueError("Missing V2 column(s): sample_count")
 
     mode = str(first.get("mode", "")).strip()
     if mode not in {"i_effective", "cw_maximum"}:
@@ -183,13 +200,22 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
         raise ValueError("Measurement distance must be greater than zero.")
 
     sample_id = str(first.get("sample_id", "Unspecified")).strip() or "Unspecified"
-    sample_count = _int(first.get("sample_count"), 1)
-    started_at = _datetime(first.get("run_started_at"))
+    # Schema 2.0 predates sample_count; retain its actual sample columns.
+    sample_count = (
+        required_number(first, "sample_count", 2, integer=True)
+        if "sample_count" in first
+        else sum(bool(str(first.get(f"sample_{i}", "")).strip()) for i in (1, 2, 3)) or 1
+    )
+    if not str(first.get("run_started_at", "")).strip():
+        raise ValueError("Row 2: run_started_at must be nonblank.")
+    started_at = _datetime(first["run_started_at"])
     coordinates = set()
     point_ids = set()
     points = []
 
     for row_number, row in enumerate(rows, start=2):
+        if None in row or any(value is None for value in row.values()):
+            raise ValueError(f"Row {row_number}: CSV row length differs from the header.")
         row_format = str(row.get("lumigon_format", "")).strip()
         row_schema = str(row.get("schema_version", "")).strip()
         row_mode = str(row.get("mode", "")).strip()
@@ -208,6 +234,12 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
             raise ValueError(
                 f"Row {row_number}: mixed sample IDs are not allowed."
             )
+        if (not str(row.get("run_started_at", "")).strip()
+                or _datetime(row["run_started_at"]) != started_at):
+            raise ValueError(f"Row {row_number}: mixed or missing run_started_at values.")
+        if "sample_count" in row:
+            if required_number(row, "sample_count", row_number, integer=True) != sample_count:
+                raise ValueError(f"Row {row_number}: mixed sample_count values.")
         if not math.isfinite(row_distance):
             raise ValueError(
                 f"Row {row_number}: measurement distance must be finite."
@@ -217,13 +249,13 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
                 f"Row {row_number}: measurement distance differs from the run distance."
             )
 
-        c_deg = _float(row.get("c_deg"))
-        gamma_deg = _float(row.get("gamma_deg"))
+        c_deg = required_number(row, "c_deg", row_number)
+        gamma_deg = required_number(row, "gamma_deg", row_number)
         if not math.isfinite(c_deg) or not math.isfinite(gamma_deg):
             raise ValueError(
                 f"Row {row_number}: C/Gamma coordinates must be finite numbers."
             )
-        point_id = _int(row.get("point"))
+        point_id = required_number(row, "point", row_number, integer=True)
         if point_id in point_ids:
             raise ValueError(
                 f"Row {row_number}: duplicate point number {point_id}."
@@ -252,6 +284,8 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
                 )
 
             expected_i = e_lx * distance_m * distance_m
+            if not math.isfinite(expected_i):
+                raise ValueError(f"Row {row_number}: E-effective × distance² overflowed.")
             tolerance = max(1e-6, abs(expected_i) * 1e-6)
             if abs(i_cd - expected_i) > tolerance:
                 raise ValueError(
@@ -279,7 +313,7 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
                 candela_cd=candela_value,
                 stdev_lux=None,
                 distance_m=distance_m,
-                samples=_int(row.get("sample_count"), sample_count),
+                samples=sample_count,
                 integration_ms=0,
                 execution_mode="V2 Step Scan",
                 status="Measured",
@@ -394,6 +428,8 @@ def load_measurement_run_csv(path) -> MeasurementRun:
     with path.open("r", newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
         fieldnames = reader.fieldnames or []
+        if len(fieldnames) != len(set(fieldnames)):
+            raise ValueError("Duplicate CSV column names are not allowed.")
         rows = list(reader)
 
     if not rows:
