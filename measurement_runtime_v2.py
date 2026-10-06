@@ -872,6 +872,10 @@ def attach_measurement_runtime_v2(window):
                 f"Complete — {points} points measured and saved."
             )
 
+        visualization = getattr(window, "visualization_workspace_controller", None)
+        if visualization is not None and path:
+            visualization.load_path(path, show_errors=True)
+
     def on_aborted(message):
         status_label.setText(message)
         status_label.setStyleSheet(
