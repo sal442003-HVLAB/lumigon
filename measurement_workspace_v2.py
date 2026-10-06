@@ -291,11 +291,6 @@ def build_measurement_workspace_v2(window):
     window.measurement_v2_summary_label = summary
     window.measurement_v2_start_button = start_button
 
-    window.measurement_v2_cw_check_button = cw_check_button
-    window.measurement_v2_cw_status_label = cw_status
-    window.measurement_v2_cw_max_label = cw_max
-    window.measurement_v2_cw_consistency_label = cw_consistency
-    window.measurement_v2_cw_timing_label = cw_timing
     window.measurement_v2_graph_placeholder = graph_placeholder
 
     page.setStyleSheet(
