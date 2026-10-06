@@ -385,6 +385,8 @@ def organize_main_window_tabs(window):
 
         QTabWidget#mainTabs::pane {
             border: 1px solid #34495E;
+            border-left: 0px;
+            border-right: 0px;
             border-radius: 0px;
             top: 0px;
             background-color: #101820;

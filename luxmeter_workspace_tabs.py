@@ -57,6 +57,9 @@ def attach_luxmeter_workspace_tabs(window):
 
     root = host.layout()
     _clear_layout(root)
+    # Align the instrument tab strip with the main tab strip above it.
+    margins = root.contentsMargins()
+    root.setContentsMargins(0, margins.top(), 0, margins.bottom())
 
     subtabs = QTabWidget(host)
     subtabs.setObjectName("luxmeterSubTabs")
@@ -97,6 +100,10 @@ def attach_luxmeter_workspace_tabs(window):
             border: 1px solid #2B4050;
             padding: 7px 14px;
             margin-right: 2px;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            border-bottom-left-radius: 0px;
+            border-bottom-right-radius: 0px;
         }
 
         QTabWidget#luxmeterSubTabs > QTabBar::tab:selected {
