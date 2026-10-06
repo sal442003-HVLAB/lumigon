@@ -1,0 +1,839 @@
+"""Automatic Version 2 goniophotometric measurement runtime.
+
+The V2 runtime intentionally owns one simple workflow:
+- move through the requested C x Gamma grid,
+- acquire three independent optical flashes at every point with the P-9710,
+- validate the three values against a relative tolerance,
+- store one accepted value for the point,
+- save every accepted point immediately to CSV.
+
+For E-effective mode the Schmidt-Clausen form-factor equation is calculated
+from the sampled CW waveform itself. No flash-period prediction is required.
+"""
+
+from __future__ import annotations
+
+import csv
+import math
+import re
+import statistics
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtWidgets import QMessageBox
+
+from machine_config import C_LIMIT_DEG, GAMMA_LIMIT_DEG
+from measurement_point_validation_v2 import (
+    DEFAULT_TOLERANCE_PCT,
+    validate_triplicate,
+)
+from measurement_run import measurement_data_directory
+from motion_controller import C_AXIS, GAMMA
+from p9710 import P9710Error
+
+
+MODE_I_EFFECTIVE = "i_effective"
+MODE_CW_MAXIMUM = "cw_maximum"
+
+CW_INTEGRATION_MS = 0.1
+INITIAL_RANGE_ID = 5
+FLASH_CAPTURE_S = 5.5
+SCHMIDT_CLAUSEN_C_S = 0.2
+SETTLE_S = 0.20
+MAX_POINT_ATTEMPTS = 3
+MIN_MODULATION_LX = 0.0005
+
+
+class _AbortRequested(RuntimeError):
+    pass
+
+
+class _RangeOverload(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class FlashSample:
+    range_id: int
+    baseline_lx: float
+    cw_max_lx: float
+    net_peak_lx: float
+    e_effective_lx: float
+    pulse_duration_ms: float
+    integral_lx_s: float
+    median_dt_ms: float
+
+
+def _percentile(values, fraction: float) -> float:
+    ordered = sorted(float(v) for v in values)
+    if not ordered:
+        raise RuntimeError("No photometric samples were captured.")
+
+    position = max(0.0, min(1.0, float(fraction))) * (len(ordered) - 1)
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _crossing_time(t0, v0, t1, v1, threshold):
+    if t1 <= t0 or v1 == v0:
+        return float(t1)
+
+    fraction = (threshold - v0) / (v1 - v0)
+    fraction = max(0.0, min(1.0, fraction))
+    return float(t0) + fraction * (float(t1) - float(t0))
+
+
+def _trapz(points):
+    area = 0.0
+    for (t0, y0), (t1, y1) in zip(points, points[1:]):
+        dt = float(t1) - float(t0)
+        if dt > 0.0:
+            area += 0.5 * (float(y0) + float(y1)) * dt
+    return area
+
+
+def analyse_single_flash(samples, *, c_s: float = SCHMIDT_CLAUSEN_C_S) -> FlashSample:
+    """Extract one complete optical flash and calculate Schmidt-Clausen E-effective."""
+
+    if len(samples) < 30:
+        raise RuntimeError("Too few CW samples were captured for one flash.")
+
+    values = [float(value) for _t, value in samples]
+    baseline = _percentile(values, 0.20)
+    high_level = _percentile(values, 0.95)
+    span = high_level - baseline
+
+    if not math.isfinite(span) or span < MIN_MODULATION_LX:
+        raise RuntimeError(
+            f"No usable optical flash was detected "
+            f"(baseline {baseline:.6g} lx, modulation {span:.6g} lx)."
+        )
+
+    deviations = [abs(v - baseline) for v in values if v <= high_level]
+    noise = statistics.median(deviations) if deviations else 0.0
+    threshold_offset = max(0.05 * span, 6.0 * noise, MIN_MODULATION_LX)
+    threshold = baseline + threshold_offset
+
+    above = [value >= threshold for value in values]
+    segments = []
+    index = 0
+
+    while index < len(samples):
+        if not above[index]:
+            index += 1
+            continue
+
+        first = index
+        while index + 1 < len(samples) and above[index + 1]:
+            index += 1
+        last = index
+        index += 1
+
+        # A pulse touching either capture boundary is incomplete and is ignored.
+        if first == 0 or last >= len(samples) - 1:
+            continue
+
+        t_start = _crossing_time(
+            samples[first - 1][0],
+            samples[first - 1][1],
+            samples[first][0],
+            samples[first][1],
+            threshold,
+        )
+        t_end = _crossing_time(
+            samples[last][0],
+            samples[last][1],
+            samples[last + 1][0],
+            samples[last + 1][1],
+            threshold,
+        )
+
+        duration_s = t_end - t_start
+        if duration_s < 0.05 or duration_s > 2.0:
+            continue
+
+        raw_values = [samples[i][1] for i in range(first, last + 1)]
+        raw_peak = max(raw_values)
+        net_peak = max(0.0, raw_peak - baseline)
+        if net_peak <= 0.0:
+            continue
+
+        integration_points = [(t_start, max(0.0, threshold - baseline))]
+        for i in range(first, last + 1):
+            integration_points.append(
+                (samples[i][0], max(0.0, samples[i][1] - baseline))
+            )
+        integration_points.append((t_end, max(0.0, threshold - baseline)))
+
+        integral = _trapz(integration_points)
+        if integral <= 0.0:
+            continue
+
+        # Schmidt-Clausen:
+        # E_eff = E_peak * J / (E_peak * C + J)
+        e_effective = net_peak * integral / (net_peak * float(c_s) + integral)
+
+        intervals = [
+            later[0] - earlier[0]
+            for earlier, later in zip(samples, samples[1:])
+            if later[0] > earlier[0]
+        ]
+        median_dt_ms = (
+            statistics.median(intervals) * 1000.0 if intervals else 0.0
+        )
+
+        segments.append(
+            FlashSample(
+                range_id=-1,
+                baseline_lx=baseline,
+                cw_max_lx=raw_peak,
+                net_peak_lx=net_peak,
+                e_effective_lx=e_effective,
+                pulse_duration_ms=duration_s * 1000.0,
+                integral_lx_s=integral,
+                median_dt_ms=median_dt_ms,
+            )
+        )
+
+    if not segments:
+        raise RuntimeError(
+            "No complete optical pulse was found inside the CW capture window."
+        )
+
+    # The expected source is a single-flash LED. If more than one complete pulse
+    # happens to fit, use the strongest complete pulse.
+    return max(segments, key=lambda item: item.net_peak_lx)
+
+
+def _axis_values(start: float, end: float, step: float):
+    start = float(start)
+    end = float(end)
+    step = abs(float(step))
+    if step <= 0.0:
+        raise ValueError("Angular resolution must be greater than zero.")
+
+    direction = 1.0 if end >= start else -1.0
+    signed_step = step * direction
+    values = []
+    current = start
+    epsilon = 1e-9
+
+    if direction > 0:
+        while current <= end + epsilon:
+            values.append(round(current, 6))
+            current += signed_step
+    else:
+        while current >= end - epsilon:
+            values.append(round(current, 6))
+            current += signed_step
+
+    if values and abs(values[-1] - end) > epsilon:
+        values.append(round(end, 6))
+    return values
+
+
+def build_serpentine_points(c_values, gamma_values):
+    points = []
+    for plane_index, c_deg in enumerate(c_values):
+        sweep = gamma_values if plane_index % 2 == 0 else list(reversed(gamma_values))
+        for gamma_deg in sweep:
+            points.append((float(c_deg), float(gamma_deg)))
+    return points
+
+
+def _safe_filename(text: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(text).strip())
+    return cleaned.strip("._-") or "sample"
+
+
+def _format_point_value(mode: str, value_lx: float, distance_m: float) -> str:
+    if mode == MODE_CW_MAXIMUM:
+        return f"{value_lx:.4f} lx CW max"
+    return (
+        f"E-effective {value_lx:.4f} lx • "
+        f"I-effective {value_lx * distance_m * distance_m:.2f} cd"
+    )
+
+
+class MeasurementV2Worker(QThread):
+    status = Signal(str)
+    point_accepted = Signal(object)
+    completed = Signal(object)
+    aborted = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        *,
+        motion,
+        meter,
+        points,
+        mode: str,
+        distance_m: float,
+        sample_id: str,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.motion = motion
+        self.meter = meter
+        self.points = [(float(c), float(g)) for c, g in points]
+        self.mode = str(mode)
+        self.distance_m = float(distance_m)
+        self.sample_id = str(sample_id).strip() or "sample"
+        self.current_range_id = INITIAL_RANGE_ID
+
+    def _check_abort(self):
+        if self.isInterruptionRequested():
+            raise _AbortRequested()
+
+    def _wait_interruptible(self, seconds: float):
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        while time.monotonic() < deadline:
+            self._check_abort()
+            remaining = deadline - time.monotonic()
+            self.msleep(max(1, min(50, int(remaining * 1000.0))))
+
+    def _capture_waveform(self, range_id: int):
+        self.meter.configure_cw(
+            integration_ms=CW_INTEGRATION_MS,
+            range_id=range_id,
+            sync_enabled=False,
+        )
+        self.msleep(50)
+
+        deadline = time.perf_counter() + FLASH_CAPTURE_S
+        samples = []
+
+        while time.perf_counter() < deadline:
+            self._check_abort()
+            try:
+                value, _raw, t1, t2 = self.meter.read_mv(
+                    attempts=1,
+                    retry_delay_s=0.0,
+                )
+            except P9710Error as exc:
+                status = self.meter._status_code(exc)
+                if status == "overload":
+                    raise _RangeOverload() from exc
+                if status == "underload":
+                    samples.append((time.perf_counter(), 0.0))
+                    continue
+
+                text = str(exc)
+                if "No response" in text or "No reliable response" in text:
+                    continue
+                raise
+
+            if math.isfinite(value):
+                samples.append(((t1 + t2) / 2.0, max(0.0, float(value))))
+
+        return samples
+
+    def _capture_one_flash(self):
+        range_id = int(self.current_range_id)
+        last_error = None
+
+        for _attempt in range(6):
+            self._check_abort()
+            try:
+                samples = self._capture_waveform(range_id)
+                flash = analyse_single_flash(samples)
+                flash = FlashSample(
+                    range_id=range_id,
+                    baseline_lx=flash.baseline_lx,
+                    cw_max_lx=flash.cw_max_lx,
+                    net_peak_lx=flash.net_peak_lx,
+                    e_effective_lx=flash.e_effective_lx,
+                    pulse_duration_ms=flash.pulse_duration_ms,
+                    integral_lx_s=flash.integral_lx_s,
+                    median_dt_ms=flash.median_dt_ms,
+                )
+                self.current_range_id = range_id
+                return flash
+            except _RangeOverload:
+                last_error = "P-9710 range overloaded."
+                if range_id <= 0:
+                    raise RuntimeError(last_error)
+                range_id -= 1
+                self.status.emit(
+                    f"Range overload — retrying on R{range_id}"
+                )
+            except RuntimeError as exc:
+                last_error = str(exc)
+                if range_id >= 7:
+                    raise
+                range_id += 1
+                self.status.emit(
+                    f"Flash not resolved — retrying on more sensitive R{range_id}"
+                )
+
+        raise RuntimeError(last_error or "Could not acquire a valid optical flash.")
+
+    def _measure_point(self, sequence: int, total: int, c_deg: float, gamma_deg: float):
+        for attempt in range(1, MAX_POINT_ATTEMPTS + 1):
+            values = []
+            flashes = []
+
+            if attempt > 1:
+                self.status.emit(
+                    f"Point {sequence}/{total} • C {c_deg:+.1f}° • Gamma {gamma_deg:+.1f}° "
+                    f"— repeat set {attempt}/{MAX_POINT_ATTEMPTS}"
+                )
+
+            for sample_number in range(1, 4):
+                self._check_abort()
+                self.status.emit(
+                    f"Point {sequence}/{total} • C {c_deg:+.1f}° • Gamma {gamma_deg:+.1f}° "
+                    f"— measuring sample {sample_number}/3"
+                )
+
+                flash = self._capture_one_flash()
+                flashes.append(flash)
+
+                value = (
+                    flash.cw_max_lx
+                    if self.mode == MODE_CW_MAXIMUM
+                    else flash.e_effective_lx
+                )
+                values.append(value)
+
+                self.status.emit(
+                    f"Point {sequence}/{total} • sample {sample_number}/3 read — "
+                    f"{_format_point_value(self.mode, value, self.distance_m)}"
+                )
+
+            validation = validate_triplicate(
+                values,
+                tolerance_pct=DEFAULT_TOLERANCE_PCT,
+            )
+
+            if validation.valid:
+                return validation, flashes, attempt
+
+            if attempt < MAX_POINT_ATTEMPTS:
+                self.status.emit(
+                    f"Point {sequence}/{total} rejected — max deviation "
+                    f"{validation.max_deviation_pct:.2f}% > "
+                    f"{validation.tolerance_pct:.1f}% • repeating same point"
+                )
+            else:
+                raise RuntimeError(
+                    f"C {c_deg:+.1f}°, Gamma {gamma_deg:+.1f}° failed "
+                    f"triplicate validation after {MAX_POINT_ATTEMPTS} sets. "
+                    f"Last maximum deviation was "
+                    f"{validation.max_deviation_pct:.2f}%."
+                )
+
+    def run(self):
+        started = datetime.now().astimezone()
+        csv_path = None
+        results = []
+
+        try:
+            if not self.points:
+                raise RuntimeError("No measurement points were generated.")
+            if self.distance_m <= 0.0:
+                raise RuntimeError("Measurement distance must be greater than zero.")
+            if self.mode not in (MODE_I_EFFECTIVE, MODE_CW_MAXIMUM):
+                raise RuntimeError(f"Unsupported V2 measurement mode: {self.mode}")
+
+            data_dir = measurement_data_directory()
+            data_dir.mkdir(parents=True, exist_ok=True)
+            stamp = started.strftime("%Y%m%d_%H%M%S")
+            mode_tag = "I_effective" if self.mode == MODE_I_EFFECTIVE else "CW_maximum"
+            csv_path = data_dir / (
+                f"{_safe_filename(self.sample_id)}_{mode_tag}_{stamp}.csv"
+            )
+
+            fieldnames = [
+                "point",
+                "c_deg",
+                "gamma_deg",
+                "mode",
+                "distance_m",
+                "sample_1",
+                "sample_2",
+                "sample_3",
+                "accepted_e_effective_lx",
+                "accepted_i_effective_cd",
+                "accepted_cw_maximum_lx",
+                "max_deviation_pct",
+                "tolerance_pct",
+                "range_ids",
+                "mean_baseline_lx",
+                "mean_net_peak_lx",
+                "mean_pulse_duration_ms",
+                "mean_sample_interval_ms",
+                "validation_attempt",
+            ]
+
+            with csv_path.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=fieldnames)
+                writer.writeheader()
+                stream.flush()
+
+                total = len(self.points)
+
+                for sequence, (c_deg, gamma_deg) in enumerate(self.points, start=1):
+                    self._check_abort()
+
+                    current_c = self.motion.get_current_angle(C_AXIS)
+                    if abs(current_c - c_deg) > 0.01:
+                        self.status.emit(
+                            f"Point {sequence}/{total} — moving C to {c_deg:+.1f}°"
+                        )
+                        self.motion.move_absolute(C_AXIS, c_deg)
+
+                    self._check_abort()
+
+                    current_gamma = self.motion.get_current_angle(GAMMA)
+                    if abs(current_gamma - gamma_deg) > 0.01:
+                        self.status.emit(
+                            f"Point {sequence}/{total} • C {c_deg:+.1f}° "
+                            f"— moving Gamma to {gamma_deg:+.1f}°"
+                        )
+                        self.motion.move_absolute(GAMMA, gamma_deg)
+
+                    self._wait_interruptible(SETTLE_S)
+
+                    validation, flashes, validation_attempt = self._measure_point(
+                        sequence,
+                        total,
+                        c_deg,
+                        gamma_deg,
+                    )
+
+                    accepted_e_lx = (
+                        validation.mean if self.mode == MODE_I_EFFECTIVE else None
+                    )
+                    accepted_i_cd = (
+                        validation.mean * self.distance_m * self.distance_m
+                        if accepted_e_lx is not None
+                        else None
+                    )
+                    accepted_cw_lx = (
+                        validation.mean if self.mode == MODE_CW_MAXIMUM else None
+                    )
+
+                    result = {
+                        "point": sequence,
+                        "c_deg": c_deg,
+                        "gamma_deg": gamma_deg,
+                        "mode": self.mode,
+                        "distance_m": self.distance_m,
+                        "sample_1": validation.values[0],
+                        "sample_2": validation.values[1],
+                        "sample_3": validation.values[2],
+                        "accepted_e_effective_lx": accepted_e_lx,
+                        "accepted_i_effective_cd": accepted_i_cd,
+                        "accepted_cw_maximum_lx": accepted_cw_lx,
+                        "max_deviation_pct": validation.max_deviation_pct,
+                        "tolerance_pct": validation.tolerance_pct,
+                        "range_ids": "/".join(str(item.range_id) for item in flashes),
+                        "mean_baseline_lx": statistics.mean(
+                            item.baseline_lx for item in flashes
+                        ),
+                        "mean_net_peak_lx": statistics.mean(
+                            item.net_peak_lx for item in flashes
+                        ),
+                        "mean_pulse_duration_ms": statistics.mean(
+                            item.pulse_duration_ms for item in flashes
+                        ),
+                        "mean_sample_interval_ms": statistics.mean(
+                            item.median_dt_ms for item in flashes
+                        ),
+                        "validation_attempt": validation_attempt,
+                    }
+
+                    writer.writerow(result)
+                    stream.flush()
+                    results.append(result)
+                    self.point_accepted.emit(dict(result))
+
+                    if self.mode == MODE_I_EFFECTIVE:
+                        accepted_text = (
+                            f"E-effective {accepted_e_lx:.4f} lx • "
+                            f"I-effective {accepted_i_cd:.2f} cd"
+                        )
+                    else:
+                        accepted_text = f"CW maximum {accepted_cw_lx:.4f} lx"
+
+                    self.status.emit(
+                        f"Point {sequence}/{total} accepted — {accepted_text} "
+                        f"• deviation {validation.max_deviation_pct:.2f}%"
+                    )
+
+                self._check_abort()
+                self.status.emit("Measurement complete — returning Gamma to 0°")
+                self.motion.move_absolute(GAMMA, 0.0)
+                self._check_abort()
+                self.status.emit("Returning C to 0°")
+                self.motion.move_absolute(C_AXIS, 0.0)
+
+            self.completed.emit(
+                {
+                    "started_at": started.isoformat(),
+                    "completed_at": datetime.now().astimezone().isoformat(),
+                    "csv_path": str(csv_path),
+                    "mode": self.mode,
+                    "points": results,
+                }
+            )
+
+        except _AbortRequested:
+            self.aborted.emit(
+                "Measurement aborted at a safe checkpoint. "
+                + (f"Partial CSV: {csv_path}" if csv_path else "")
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+def attach_measurement_runtime_v2(window):
+    """Connect the V2 Measurement page to MotionController and the P-9710."""
+
+    start_button = getattr(window, "measurement_v2_start_button", None)
+    status_label = getattr(window, "measurement_v2_status_label", None)
+
+    if start_button is None or status_label is None:
+        raise RuntimeError("V2 Measurement controls are not available.")
+
+    holder = {"worker": None, "timer_was_active": False}
+
+    editor_controls = [
+        getattr(window, "measurement_v2_sample_id_edit", None),
+        getattr(window, "measurement_v2_distance_spin", None),
+        getattr(window, "measurement_v2_mode_combo", None),
+        getattr(window, "measurement_v2_c_start", None),
+        getattr(window, "measurement_v2_c_end", None),
+        getattr(window, "measurement_v2_c_step", None),
+        getattr(window, "measurement_v2_gamma_start", None),
+        getattr(window, "measurement_v2_gamma_end", None),
+        getattr(window, "measurement_v2_gamma_step", None),
+    ]
+
+    def set_editor_enabled(enabled: bool):
+        for control in editor_controls:
+            if control is not None:
+                control.setEnabled(bool(enabled))
+
+    def set_tabs_enabled(enabled: bool):
+        tabs = getattr(window, "main_tabs", None)
+        if tabs is None:
+            return
+        for index in (0, 1):
+            if index < tabs.count():
+                tabs.setTabEnabled(index, bool(enabled))
+
+    def precheck():
+        if not getattr(window.modbus, "is_connected", False):
+            return "Connect the two servo drives in Motor Control first."
+
+        if window.gamma_zero_puu is None or window.c_zero_puu is None:
+            return "Set Zero for both axes in Motor Control before starting."
+
+        manual_worker = getattr(window, "manual_motion_worker", None)
+        if manual_worker is not None and manual_worker.isRunning():
+            return "A manual axis movement is still running."
+
+        meter_holder = getattr(window, "p9710_meter_holder", None)
+        meter = None if meter_holder is None else meter_holder.get("meter")
+        if meter is None or not meter.is_connected:
+            return "Connect the P-9710 in the Luxmeter tab first."
+
+        p9710_worker_holder = getattr(window, "p9710_mode_worker_holder", None)
+        if (
+            p9710_worker_holder is not None
+            and p9710_worker_holder.get("worker") is not None
+        ):
+            return "A P-9710 Luxmeter operation is already running."
+
+        c_start = window.measurement_v2_c_start.value()
+        c_end = window.measurement_v2_c_end.value()
+        gamma_start = window.measurement_v2_gamma_start.value()
+        gamma_end = window.measurement_v2_gamma_end.value()
+
+        if max(abs(c_start), abs(c_end)) > C_LIMIT_DEG + 1e-9:
+            return (
+                f"Requested C range exceeds the current Motion Control limit "
+                f"of ±{C_LIMIT_DEG:g}°."
+            )
+
+        if max(abs(gamma_start), abs(gamma_end)) > GAMMA_LIMIT_DEG + 1e-9:
+            return (
+                f"Requested Gamma range exceeds the current Motion Control limit "
+                f"of ±{GAMMA_LIMIT_DEG:g}°."
+            )
+
+        return None
+
+    def finish_worker():
+        worker = holder["worker"]
+        if worker is not None:
+            worker.deleteLater()
+        holder["worker"] = None
+        window.measurement_v2_worker = None
+
+        set_editor_enabled(True)
+        set_tabs_enabled(True)
+        start_button.setText("Start Measurement")
+        start_button.setEnabled(True)
+
+        if holder["timer_was_active"] and window.modbus.is_connected:
+            window.timer.start()
+        holder["timer_was_active"] = False
+
+    def on_point(result):
+        window.measurement_v2_results.append(dict(result))
+
+    def on_completed(payload):
+        window.measurement_v2_last_run = payload
+        points = len(payload.get("points") or [])
+        path = payload.get("csv_path") or ""
+        status_label.setText(
+            f"Complete — {points} points measured and saved • {path}"
+        )
+        status_label.setStyleSheet(
+            "color:#55EFC4; background-color:#142A38; "
+            "border:1px solid #2C617E; border-radius:5px; "
+            "padding:6px 10px; font-weight:700;"
+        )
+
+    def on_aborted(message):
+        status_label.setText(message)
+        status_label.setStyleSheet(
+            "color:#E7C76A; background-color:#142A38; "
+            "border:1px solid #2C617E; border-radius:5px; "
+            "padding:6px 10px; font-weight:700;"
+        )
+
+    def on_failed(message):
+        status_label.setText("Measurement stopped — error")
+        status_label.setStyleSheet(
+            "color:#FF7675; background-color:#142A38; "
+            "border:1px solid #2C617E; border-radius:5px; "
+            "padding:6px 10px; font-weight:700;"
+        )
+        QMessageBox.critical(window, "V2 Measurement Error", message)
+
+    def start_or_abort():
+        running = holder["worker"]
+        if running is not None:
+            if running.isRunning():
+                running.requestInterruption()
+                start_button.setEnabled(False)
+                status_label.setText(
+                    "Abort requested — finishing the current safe operation…"
+                )
+            return
+
+        problem = precheck()
+        if problem:
+            QMessageBox.warning(window, "V2 Measurement", problem)
+            return
+
+        try:
+            c_values = _axis_values(
+                window.measurement_v2_c_start.value(),
+                window.measurement_v2_c_end.value(),
+                window.measurement_v2_c_step.value(),
+            )
+            gamma_values = _axis_values(
+                window.measurement_v2_gamma_start.value(),
+                window.measurement_v2_gamma_end.value(),
+                window.measurement_v2_gamma_step.value(),
+            )
+        except Exception as exc:
+            QMessageBox.warning(window, "V2 Measurement", str(exc))
+            return
+
+        points = build_serpentine_points(c_values, gamma_values)
+        if not points:
+            QMessageBox.warning(
+                window,
+                "V2 Measurement",
+                "The selected angular ranges produced no measurement points.",
+            )
+            return
+
+        mode = str(window.measurement_v2_mode_combo.currentData())
+        distance_m = float(window.measurement_v2_distance_spin.value())
+        sample_id = window.measurement_v2_sample_id_edit.text().strip() or "sample"
+
+        answer = QMessageBox.question(
+            window,
+            "Start Automatic Measurement",
+            f"Start {len(points)} points?\n\n"
+            f"C: {c_values[0]:+.1f}° to {c_values[-1]:+.1f}°\n"
+            f"Gamma: {gamma_values[0]:+.1f}° to {gamma_values[-1]:+.1f}°\n"
+            f"Mode: {window.measurement_v2_mode_combo.currentText()}\n"
+            f"Distance: {distance_m:.2f} m\n\n"
+            "Each point uses three independently captured flashes. "
+            "Keep the physical E-STOP accessible.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        stop_continuous = getattr(window, "p9710_stop_continuous", None)
+        if callable(stop_continuous):
+            stop_continuous()
+
+        meter = window.p9710_meter_holder["meter"]
+
+        holder["timer_was_active"] = bool(window.timer.isActive())
+        if holder["timer_was_active"]:
+            window.timer.stop()
+
+        set_editor_enabled(False)
+        set_tabs_enabled(False)
+        start_button.setText("Abort Measurement")
+        start_button.setEnabled(True)
+        status_label.setStyleSheet(
+            "color:#9DD5F3; background-color:#142A38; "
+            "border:1px solid #2C617E; border-radius:5px; "
+            "padding:6px 10px; font-weight:700;"
+        )
+        status_label.setText(
+            f"Starting — {len(points)} points • preparing C/Gamma scan"
+        )
+
+        window.measurement_v2_results = []
+        window.measurement_v2_last_run = None
+
+        worker = MeasurementV2Worker(
+            motion=window.motion,
+            meter=meter,
+            points=points,
+            mode=mode,
+            distance_m=distance_m,
+            sample_id=sample_id,
+            parent=window,
+        )
+        holder["worker"] = worker
+        window.measurement_v2_worker = worker
+
+        worker.status.connect(status_label.setText)
+        worker.point_accepted.connect(on_point)
+        worker.completed.connect(on_completed)
+        worker.aborted.connect(on_aborted)
+        worker.failed.connect(on_failed)
+        worker.finished.connect(finish_worker)
+        worker.start()
+
+    start_button.clicked.connect(start_or_abort)
+    start_button.setEnabled(True)
+
+    window.measurement_v2_worker = None
+    window.measurement_v2_results = []
+    window.measurement_v2_last_run = None
+    return start_button
