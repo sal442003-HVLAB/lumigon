@@ -82,12 +82,12 @@ JOG_STEP_DEG = 1.0
 # ------------------------------------------------------------
 # Current temporary software motion envelopes around Session Zero.
 # C is mechanically clear to ±80° in the present setup.
-# Gamma is intentionally kept tight at ±6° for the current photometric work.
+# Gamma is limited to ±60°.
 # These remain software safety limits; a later V2 settings control may make
 # the C limit operator-configurable with 80° as its default.
-# Gamma axis: -6° ... +6°
+# Gamma axis: -60° ... +60°
 # C axis:     -80° ... +80°
-GAMMA_LIMIT_DEG = 6.0
+GAMMA_LIMIT_DEG = 60.0
 C_LIMIT_DEG = 80.0
 
 # Legacy compatibility value for older UI/helper code. MotionController does
