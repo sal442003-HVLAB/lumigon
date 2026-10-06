@@ -2,7 +2,7 @@
 
 Version 2 keeps Measurement deliberately small. Motion Control and Luxmeter
 remain separate instrument workspaces. This page contains only the parameters
-needed for the goniophotometric run plus a compact CW acquisition check.
+needed for the goniophotometric run.
 """
 
 from __future__ import annotations
@@ -195,7 +195,7 @@ def build_measurement_workspace_v2(window):
     summary.setWordWrap(True)
     left.addWidget(summary)
 
-    acquisition_box = QGroupBox("CW Acquisition Check")
+    acquisition_box = QGroupBox("Acquisition")
     acquisition = QGridLayout(acquisition_box)
     acquisition.setContentsMargins(14, 12, 14, 12)
     acquisition.setHorizontalSpacing(18)
@@ -203,30 +203,10 @@ def build_measurement_workspace_v2(window):
 
     acquisition.addWidget(QLabel("Photometer:"), 0, 0)
     acquisition.addWidget(QLabel("Gigahertz-Optik P-9710"), 0, 1)
-    acquisition.addWidget(QLabel("Mode:"), 1, 0)
-    acquisition.addWidget(QLabel("CW waveform • fixed R5 • SN1"), 1, 1)
-    acquisition.addWidget(QLabel("Validation:"), 2, 0)
-    acquisition.addWidget(QLabel("5 complete flashes"), 2, 1)
-
-    cw_check_button = QPushButton("Check CW — 5 flashes")
-    cw_check_button.setFixedWidth(210)
-    acquisition.addWidget(cw_check_button, 3, 0, 1, 2, Qt.AlignLeft)
-
-    cw_status = QLabel("Ready")
-    cw_status.setObjectName("measurementV2CwStatus")
-    cw_status.setWordWrap(True)
-    acquisition.addWidget(cw_status, 4, 0, 1, 2)
-
-    cw_max = QLabel("CW max: —")
-    cw_consistency = QLabel("Consistency: —")
-    cw_timing = QLabel("Timing: —")
-    for label in (cw_max, cw_consistency, cw_timing):
-        label.setObjectName("measurementV2CwResult")
-        label.setWordWrap(True)
-
-    acquisition.addWidget(cw_max, 5, 0, 1, 2)
-    acquisition.addWidget(cw_consistency, 6, 0, 1, 2)
-    acquisition.addWidget(cw_timing, 7, 0, 1, 2)
+    acquisition.addWidget(QLabel("Method:"), 1, 0)
+    acquisition.addWidget(QLabel("CW waveform → Schmidt-Clausen"), 1, 1)
+    acquisition.addWidget(QLabel("Samples / point:"), 2, 0)
+    acquisition.addWidget(QLabel("3 independent measurements"), 2, 1)
     acquisition.setColumnStretch(1, 1)
 
     left.addWidget(acquisition_box)
@@ -235,7 +215,7 @@ def build_measurement_workspace_v2(window):
     footer.setSpacing(10)
 
     ready_note = QLabel(
-        "CW acquisition is enabled first. Automatic C/Gamma scan execution will be connected after this check is validated."
+        "At each C/Gamma point, three measurements will be checked for consistency before one validated value is stored."
     )
     ready_note.setObjectName("measurementV2Note")
     ready_note.setWordWrap(True)
@@ -350,17 +330,6 @@ def build_measurement_workspace_v2(window):
             border: 1px solid #2B4050;
             border-radius: 5px;
             padding: 9px 11px;
-        }
-        QLabel#measurementV2CwStatus {
-            color: #8FA9B9;
-            padding-top: 3px;
-        }
-        QLabel#measurementV2CwResult {
-            color: #D6E4ED;
-            background-color: #14212B;
-            border: 1px solid #2B4050;
-            border-radius: 4px;
-            padding: 6px 9px;
         }
         QLabel#measurementV2GraphPlaceholder {
             color: #718897;
