@@ -281,7 +281,7 @@ def build_measurement_workspace_v2(window):
             acquisition_method.setText("CW maximum")
         else:
             acquisition_method.setText(
-                "CW waveform → Schmidt-Clausen → E-effective → I-effective"
+                "CW waveform → Schmidt-Clausen (C=0.2 s) → E-effective → I-effective"
             )
 
     measurement_mode.currentIndexChanged.connect(update_measurement_mode)
