@@ -1,9 +1,10 @@
 """Load previously saved Lumigon measurement CSV files back into the run model.
 
-This loader accepts both the original MeasurementRun CSV schema and the newer
-P-9710 MIOL acquisition CSV written by ``p9710_miol_grid_runtime.py``.  Both are
-normalized into MeasurementRun so the Results workspace can analyse them with
-the same charts and summary tools.
+This loader accepts the original MeasurementRun CSV schema, P-9710 MIOL CSV,
+and the Version 2 Measurement CSV. All are normalized into MeasurementRun so
+analysis/visualization code can use one stable data model. Version 2 files are
+checked strictly for schema consistency, duplicate coordinates, and the
+I-effective = E-effective × distance² relationship before they are accepted.
 """
 
 from __future__ import annotations
@@ -41,6 +42,20 @@ def _datetime(value):
         return datetime.now().astimezone()
     parsed = datetime.fromisoformat(text)
     return parsed if parsed.tzinfo is not None else parsed.astimezone()
+
+
+def _looks_like_v2_measurement_csv(fieldnames) -> bool:
+    names = set(fieldnames or [])
+    required = {
+        "lumigon_format",
+        "schema_version",
+        "point",
+        "c_deg",
+        "gamma_deg",
+        "mode",
+        "distance_m",
+    }
+    return required.issubset(names)
 
 
 def _looks_like_miol_csv(fieldnames) -> bool:
@@ -141,6 +156,152 @@ def _load_p9710_miol_csv(path: Path, rows: list[dict]) -> MeasurementRun:
     )
 
 
+def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
+    """Load the Version 2 Measurement CSV with strict integrity checks."""
+
+    first = rows[0]
+    format_name = str(first.get("lumigon_format", "")).strip()
+    if format_name != "Lumigon Measurement V2":
+        raise ValueError(
+            "Unsupported Version 2 measurement identifier: "
+            f"{format_name or '<blank>'}"
+        )
+
+    schema_version = str(first.get("schema_version", "")).strip()
+    if schema_version not in {"2.0", "2.1"}:
+        raise ValueError(
+            f"Unsupported Lumigon Measurement V2 schema: {schema_version or '<blank>'}"
+        )
+
+    mode = str(first.get("mode", "")).strip()
+    if mode not in {"i_effective", "cw_maximum"}:
+        raise ValueError(f"Unsupported V2 measurement mode: {mode or '<blank>'}")
+
+    distance_m = _float(first.get("distance_m"))
+    if distance_m <= 0.0:
+        raise ValueError("Measurement distance must be greater than zero.")
+
+    sample_id = str(first.get("sample_id", "Unspecified")).strip() or "Unspecified"
+    sample_count = _int(first.get("sample_count"), 1)
+    started_at = _datetime(first.get("run_started_at"))
+    coordinates = set()
+    points = []
+
+    for row_number, row in enumerate(rows, start=2):
+        row_format = str(row.get("lumigon_format", "")).strip()
+        row_schema = str(row.get("schema_version", "")).strip()
+        row_mode = str(row.get("mode", "")).strip()
+        row_distance = _float(row.get("distance_m"))
+
+        if row_format != format_name or row_schema != schema_version:
+            raise ValueError(
+                f"Row {row_number}: mixed Lumigon V2 format/schema values are not allowed."
+            )
+        if row_mode != mode:
+            raise ValueError(
+                f"Row {row_number}: mixed measurement modes are not allowed."
+            )
+        if abs(row_distance - distance_m) > max(1e-9, abs(distance_m) * 1e-9):
+            raise ValueError(
+                f"Row {row_number}: measurement distance differs from the run distance."
+            )
+
+        c_deg = _float(row.get("c_deg"))
+        gamma_deg = _float(row.get("gamma_deg"))
+        coordinate = (round(c_deg, 9), round(gamma_deg, 9))
+        if coordinate in coordinates:
+            raise ValueError(
+                f"Row {row_number}: duplicate C/Gamma coordinate "
+                f"({c_deg:g}°, {gamma_deg:g}°)."
+            )
+        coordinates.add(coordinate)
+
+        if mode == "i_effective":
+            e_lx = _float_or_none(row.get("accepted_e_effective_lx"))
+            i_cd = _float_or_none(row.get("accepted_i_effective_cd"))
+            if e_lx is None or i_cd is None:
+                raise ValueError(
+                    f"Row {row_number}: E-effective and I-effective are both required."
+                )
+
+            expected_i = e_lx * distance_m * distance_m
+            tolerance = max(1e-6, abs(expected_i) * 1e-6)
+            if abs(i_cd - expected_i) > tolerance:
+                raise ValueError(
+                    f"Row {row_number}: I-effective is inconsistent with "
+                    "E-effective × distance²."
+                )
+            lux_value = e_lx
+            candela_value = i_cd
+        else:
+            cw_lx = _float_or_none(row.get("accepted_cw_maximum_lx"))
+            if cw_lx is None:
+                raise ValueError(
+                    f"Row {row_number}: accepted CW maximum is missing."
+                )
+            lux_value = cw_lx
+            candela_value = None
+
+        points.append(
+            MeasurementPoint(
+                point=_int(row.get("point")),
+                c_deg=c_deg,
+                gamma_deg=gamma_deg,
+                current_na=None,
+                lux=lux_value,
+                candela_cd=candela_value,
+                stdev_lux=None,
+                distance_m=distance_m,
+                samples=_int(row.get("sample_count"), sample_count),
+                integration_ms=0,
+                execution_mode="V2 Step Scan",
+                status="Measured",
+            )
+        )
+
+    c_values = {round(point.c_deg, 6) for point in points}
+    gamma_values = {round(point.gamma_deg, 6) for point in points}
+    if len(c_values) > 1 and len(gamma_values) > 1:
+        scan_mode = "C × Gamma Grid"
+    elif len(c_values) == 1 and len(gamma_values) > 1:
+        scan_mode = "Gamma Sweep"
+    elif len(gamma_values) == 1 and len(c_values) > 1:
+        scan_mode = "C Sweep"
+    else:
+        scan_mode = "Single Point"
+
+    try:
+        completed_at = datetime.fromtimestamp(path.stat().st_mtime).astimezone()
+    except Exception:
+        completed_at = started_at
+    duration_s = max(0.0, (completed_at - started_at).total_seconds())
+
+    return MeasurementRun(
+        run_id=f"V2-{started_at.strftime('%Y%m%d-%H%M%S')}",
+        started_at=started_at,
+        completed_at=completed_at,
+        duration_s=duration_s,
+        application="Goniophotometry",
+        product="Lumigon V2",
+        profile=(
+            "E-effective → I-effective"
+            if mode == "i_effective"
+            else "CW maximum"
+        ),
+        standard="Not evaluated",
+        sample_id=sample_id,
+        scan_mode=scan_mode,
+        execution_mode="V2 Step Scan",
+        distance_m=distance_m,
+        settle_s=0.0,
+        samples=sample_count,
+        integration_ms=0,
+        home_status="Imported from validated Lumigon V2 CSV",
+        points=points,
+        csv_path=path,
+    )
+
+
 def _load_standard_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
     first = rows[0]
     required = {
@@ -201,7 +362,7 @@ def _load_standard_measurement_csv(path: Path, rows: list[dict]) -> MeasurementR
 
 
 def load_measurement_run_csv(path) -> MeasurementRun:
-    """Load a supported Lumigon standard or P-9710 MIOL CSV into Results."""
+    """Load a supported Lumigon CSV into the common MeasurementRun model."""
     path = Path(path)
     with path.open("r", newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -210,6 +371,9 @@ def load_measurement_run_csv(path) -> MeasurementRun:
 
     if not rows:
         raise ValueError("The selected CSV contains no measurement rows.")
+
+    if _looks_like_v2_measurement_csv(fieldnames):
+        return _load_v2_measurement_csv(path, rows)
 
     if _looks_like_miol_csv(fieldnames):
         return _load_p9710_miol_csv(path, rows)
