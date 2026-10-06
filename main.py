@@ -26,6 +26,7 @@ from results_operator_refinements import (
 from luxmeter_workspace_tabs import attach_luxmeter_workspace_tabs
 from tabbed_layout import organize_main_window_tabs
 from measurement_scroll_runtime import attach_measurement_scroll_runtime
+from measurement_runtime_v2 import attach_measurement_runtime_v2
 from luxmeter_scroll_runtime import attach_luxmeter_scroll_runtime
 from grid_results_runtime import attach_grid_results_runtime
 from results_workspace import attach_results_workspace
@@ -191,6 +192,7 @@ def main():
     attach_luxmeter_workspace_tabs(window)
     attach_luxmeter_scroll_runtime(window)
     attach_p9710_flash_timing_runtime(window)
+    attach_measurement_runtime_v2(window)
 
     attach_results_workspace(window)
     attach_results_preload_refinement(window)
