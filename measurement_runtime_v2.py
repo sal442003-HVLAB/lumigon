@@ -279,6 +279,7 @@ class MeasurementV2Worker(QThread):
         mode: str,
         distance_m: float,
         sample_id: str,
+        output_path,
         parent=None,
     ):
         super().__init__(parent)
@@ -288,6 +289,7 @@ class MeasurementV2Worker(QThread):
         self.mode = str(mode)
         self.distance_m = float(distance_m)
         self.sample_id = str(sample_id).strip() or "sample"
+        self.output_path = Path(output_path)
         self.current_range_id = INITIAL_RANGE_ID
 
     def _check_abort(self):
@@ -445,15 +447,14 @@ class MeasurementV2Worker(QThread):
             if self.mode not in (MODE_I_EFFECTIVE, MODE_CW_MAXIMUM):
                 raise RuntimeError(f"Unsupported V2 measurement mode: {self.mode}")
 
-            data_dir = measurement_data_directory()
-            data_dir.mkdir(parents=True, exist_ok=True)
-            stamp = started.strftime("%Y%m%d_%H%M%S")
-            mode_tag = "I_effective" if self.mode == MODE_I_EFFECTIVE else "CW_maximum"
-            csv_path = data_dir / (
-                f"{_safe_filename(self.sample_id)}_{mode_tag}_{stamp}.csv"
-            )
+            csv_path = self.output_path
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
 
             fieldnames = [
+                "lumigon_format",
+                "schema_version",
+                "sample_id",
+                "run_started_at",
                 "point",
                 "c_deg",
                 "gamma_deg",
@@ -524,6 +525,10 @@ class MeasurementV2Worker(QThread):
                     )
 
                     result = {
+                        "lumigon_format": "Lumigon Measurement V2",
+                        "schema_version": "2.0",
+                        "sample_id": self.sample_id,
+                        "run_started_at": started.isoformat(),
                         "point": sequence,
                         "c_deg": c_deg,
                         "gamma_deg": gamma_deg,
@@ -612,6 +617,9 @@ def attach_measurement_runtime_v2(window):
         getattr(window, "measurement_v2_sample_id_edit", None),
         getattr(window, "measurement_v2_distance_spin", None),
         getattr(window, "measurement_v2_mode_combo", None),
+        getattr(window, "measurement_v2_file_name_edit", None),
+        getattr(window, "measurement_v2_save_folder_edit", None),
+        getattr(window, "measurement_v2_browse_folder_button", None),
         getattr(window, "measurement_v2_c_start", None),
         getattr(window, "measurement_v2_c_end", None),
         getattr(window, "measurement_v2_c_step", None),
@@ -692,7 +700,11 @@ def attach_measurement_runtime_v2(window):
         holder["timer_was_active"] = False
 
     def on_point(result):
-        window.measurement_v2_results.append(dict(result))
+        item = dict(result)
+        window.measurement_v2_results.append(item)
+        graph = getattr(window, "measurement_v2_graph", None)
+        if graph is not None:
+            graph.add_point(item)
 
     def on_completed(payload):
         window.measurement_v2_last_run = payload
@@ -768,6 +780,45 @@ def attach_measurement_runtime_v2(window):
         distance_m = float(window.measurement_v2_distance_spin.value())
         sample_id = window.measurement_v2_sample_id_edit.text().strip() or "sample"
 
+        save_folder_text = window.measurement_v2_save_folder_edit.text().strip()
+        save_dir = Path(save_folder_text or measurement_data_directory()).expanduser()
+        try:
+            save_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            QMessageBox.warning(
+                window,
+                "V2 Measurement",
+                f"Could not create or access the selected save folder:\n\n{exc}",
+            )
+            return
+
+        requested_name = window.measurement_v2_file_name_edit.text().strip()
+        if requested_name:
+            filename = Path(requested_name).name
+            if not filename.lower().endswith(".csv"):
+                filename += ".csv"
+        else:
+            stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+            mode_tag = (
+                "I_effective"
+                if mode == MODE_I_EFFECTIVE
+                else "CW_maximum"
+            )
+            filename = f"{_safe_filename(sample_id)}_{mode_tag}_{stamp}.csv"
+
+        output_path = save_dir / filename
+
+        if output_path.exists():
+            overwrite = QMessageBox.question(
+                window,
+                "Overwrite Measurement File?",
+                f"The selected file already exists:\n\n{output_path}\n\nOverwrite it?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if overwrite != QMessageBox.Yes:
+                return
+
         answer = QMessageBox.question(
             window,
             "Start Automatic Measurement",
@@ -775,7 +826,8 @@ def attach_measurement_runtime_v2(window):
             f"C: {c_values[0]:+.1f}° to {c_values[-1]:+.1f}°\n"
             f"Gamma: {gamma_values[0]:+.1f}° to {gamma_values[-1]:+.1f}°\n"
             f"Mode: {window.measurement_v2_mode_combo.currentText()}\n"
-            f"Distance: {distance_m:.2f} m\n\n"
+            f"Distance: {distance_m:.2f} m\n"
+            f"File: {output_path}\n\n"
             "Each point uses three independently captured flashes. "
             "Keep the physical E-STOP accessible.",
             QMessageBox.Yes | QMessageBox.No,
@@ -810,6 +862,15 @@ def attach_measurement_runtime_v2(window):
         window.measurement_v2_results = []
         window.measurement_v2_last_run = None
 
+        graph = getattr(window, "measurement_v2_graph", None)
+        if graph is not None:
+            graph.reset(
+                mode=mode,
+                distance_m=distance_m,
+                gamma_min=gamma_values[0],
+                gamma_max=gamma_values[-1],
+            )
+
         worker = MeasurementV2Worker(
             motion=window.motion,
             meter=meter,
@@ -817,6 +878,7 @@ def attach_measurement_runtime_v2(window):
             mode=mode,
             distance_m=distance_m,
             sample_id=sample_id,
+            output_path=output_path,
             parent=window,
         )
         holder["worker"] = worker
