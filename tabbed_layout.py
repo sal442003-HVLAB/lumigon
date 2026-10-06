@@ -392,6 +392,7 @@ def organize_main_window_tabs(window):
 
         QTabWidget#mainTabs > QTabBar {
             left: 0px;
+            border-bottom: 1px solid #34495E;
         }
 
         QTabBar::tab {
