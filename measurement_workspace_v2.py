@@ -1,9 +1,8 @@
 """Minimal Version 2 Measurement workspace for Lumigon.
 
-This page is intentionally setup-only for the first V2 step.  It does not
-change Motion Control or Luxmeter behavior and it does not yet execute a scan.
-The acquisition engine will be connected only after the new workflow is
-validated.
+Version 2 keeps Measurement deliberately small. Motion Control and Luxmeter
+remain separate instrument workspaces. This page contains only the parameters
+needed for the goniophotometric run plus a compact CW acquisition check.
 """
 
 from __future__ import annotations
@@ -59,6 +58,8 @@ def build_measurement_workspace_v2(window):
 
     page = QWidget()
     page.setObjectName("measurementWorkspace")
+    page.setMinimumWidth(0)
+    page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
     root = QVBoxLayout(page)
     root.setContentsMargins(18, 16, 18, 18)
@@ -91,9 +92,15 @@ def build_measurement_workspace_v2(window):
 
     root.addLayout(header)
 
-    # ------------------------------------------------------------------
-    # Test
-    # ------------------------------------------------------------------
+    body = QHBoxLayout()
+    body.setSpacing(16)
+
+    # ==================================================================
+    # Left: only parameters needed to define and verify a measurement.
+    # ==================================================================
+    left = QVBoxLayout()
+    left.setSpacing(12)
+
     test_box = QGroupBox("Test")
     test_form = QFormLayout(test_box)
     test_form.setContentsMargins(14, 12, 14, 12)
@@ -118,12 +125,9 @@ def build_measurement_workspace_v2(window):
     test_form.addRow("Sample:", sample_id)
     test_form.addRow("Distance:", distance)
     test_form.addRow("Measurement:", measurement_method)
+    left.addWidget(test_box)
 
-    root.addWidget(test_box)
-
-    # ------------------------------------------------------------------
-    # Angular scan
-    # ------------------------------------------------------------------
+    # End this card immediately after the angular resolution controls.
     scan_box = QGroupBox("Angular Scan")
     scan = QGridLayout(scan_box)
     scan.setContentsMargins(14, 12, 14, 12)
@@ -182,20 +186,16 @@ def build_measurement_workspace_v2(window):
     scan.addWidget(gamma_start, 2, 1)
     scan.addWidget(gamma_end, 2, 2)
     scan.addWidget(gamma_step, 2, 3)
-
     scan.setColumnStretch(4, 1)
+
+    left.addWidget(scan_box)
 
     summary = QLabel()
     summary.setObjectName("measurementV2Summary")
     summary.setWordWrap(True)
-    scan.addWidget(summary, 3, 0, 1, 5)
+    left.addWidget(summary)
 
-    root.addWidget(scan_box)
-
-    # ------------------------------------------------------------------
-    # Acquisition summary — fixed workflow, not another set of controls.
-    # ------------------------------------------------------------------
-    acquisition_box = QGroupBox("Acquisition")
+    acquisition_box = QGroupBox("CW Acquisition Check")
     acquisition = QGridLayout(acquisition_box)
     acquisition.setContentsMargins(14, 12, 14, 12)
     acquisition.setHorizontalSpacing(18)
@@ -203,23 +203,40 @@ def build_measurement_workspace_v2(window):
 
     acquisition.addWidget(QLabel("Photometer:"), 0, 0)
     acquisition.addWidget(QLabel("Gigahertz-Optik P-9710"), 0, 1)
-    acquisition.addWidget(QLabel("Method:"), 1, 0)
-    acquisition.addWidget(QLabel("CW waveform acquisition"), 1, 1)
-    acquisition.addWidget(QLabel("Timing:"), 2, 0)
-    acquisition.addWidget(QLabel("Automatic from optical pulse"), 2, 1)
-    acquisition.addWidget(QLabel("Effective value:"), 3, 0)
-    acquisition.addWidget(QLabel("Schmidt-Clausen in Lumigon"), 3, 1)
+    acquisition.addWidget(QLabel("Mode:"), 1, 0)
+    acquisition.addWidget(QLabel("CW waveform • fixed R5 • SN1"), 1, 1)
+    acquisition.addWidget(QLabel("Validation:"), 2, 0)
+    acquisition.addWidget(QLabel("5 complete flashes"), 2, 1)
+
+    cw_check_button = QPushButton("Check CW — 5 flashes")
+    cw_check_button.setFixedWidth(210)
+    acquisition.addWidget(cw_check_button, 3, 0, 1, 2, Qt.AlignLeft)
+
+    cw_status = QLabel("Ready")
+    cw_status.setObjectName("measurementV2CwStatus")
+    cw_status.setWordWrap(True)
+    acquisition.addWidget(cw_status, 4, 0, 1, 2)
+
+    cw_max = QLabel("CW max: —")
+    cw_consistency = QLabel("Consistency: —")
+    cw_timing = QLabel("Timing: —")
+    for label in (cw_max, cw_consistency, cw_timing):
+        label.setObjectName("measurementV2CwResult")
+        label.setWordWrap(True)
+
+    acquisition.addWidget(cw_max, 5, 0, 1, 2)
+    acquisition.addWidget(cw_consistency, 6, 0, 1, 2)
+    acquisition.addWidget(cw_timing, 7, 0, 1, 2)
     acquisition.setColumnStretch(1, 1)
 
-    root.addWidget(acquisition_box)
+    left.addWidget(acquisition_box)
 
-    # ------------------------------------------------------------------
-    # One clear action. Execution intentionally remains disconnected.
-    # ------------------------------------------------------------------
     footer = QHBoxLayout()
     footer.setSpacing(10)
 
-    ready_note = QLabel("Setup only — scan execution will be connected in the next V2 step.")
+    ready_note = QLabel(
+        "CW acquisition is enabled first. Automatic C/Gamma scan execution will be connected after this check is validated."
+    )
     ready_note.setObjectName("measurementV2Note")
     ready_note.setWordWrap(True)
     footer.addWidget(ready_note, 1)
@@ -228,12 +245,35 @@ def build_measurement_workspace_v2(window):
     start_button.setFixedWidth(190)
     start_button.setEnabled(False)
     start_button.setToolTip(
-        "V2 acquisition execution is intentionally not connected yet."
+        "Automatic V2 C/Gamma execution is intentionally not connected yet."
     )
     footer.addWidget(start_button, 0, Qt.AlignRight)
+    left.addLayout(footer)
+    left.addStretch(1)
 
-    root.addLayout(footer)
-    root.addStretch(1)
+    body.addLayout(left, 5)
+
+    # ==================================================================
+    # Right: reserved now; later one graph per measured C plane.
+    # ==================================================================
+    graph_box = QGroupBox("C-plane Graph")
+    graph_box.setMinimumWidth(420)
+    graph_layout = QVBoxLayout(graph_box)
+    graph_layout.setContentsMargins(14, 14, 14, 14)
+
+    graph_placeholder = QLabel(
+        "Reserved for the live C-plane graph\n\n"
+        "Each measured C plane will later show its Gamma profile here."
+    )
+    graph_placeholder.setObjectName("measurementV2GraphPlaceholder")
+    graph_placeholder.setAlignment(Qt.AlignCenter)
+    graph_placeholder.setWordWrap(True)
+    graph_placeholder.setMinimumHeight(360)
+
+    graph_layout.addWidget(graph_placeholder, 1)
+    body.addWidget(graph_box, 4)
+
+    root.addLayout(body)
 
     def update_summary(*_args):
         c_count = _axis_count(c_start.value(), c_end.value(), c_step.value())
@@ -258,7 +298,7 @@ def build_measurement_workspace_v2(window):
 
     update_summary()
 
-    # Keep only the small, stable public surface needed by future V2 runtime.
+    # Small public surface for the V2 acquisition/runtime layers.
     window.measurement_workspace = page
     window.measurement_v2_sample_id_edit = sample_id
     window.measurement_v2_distance_spin = distance
@@ -271,8 +311,12 @@ def build_measurement_workspace_v2(window):
     window.measurement_v2_summary_label = summary
     window.measurement_v2_start_button = start_button
 
-    page.setMinimumWidth(0)
-    page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+    window.measurement_v2_cw_check_button = cw_check_button
+    window.measurement_v2_cw_status_label = cw_status
+    window.measurement_v2_cw_max_label = cw_max
+    window.measurement_v2_cw_consistency_label = cw_consistency
+    window.measurement_v2_cw_timing_label = cw_timing
+    window.measurement_v2_graph_placeholder = graph_placeholder
 
     page.setStyleSheet(
         """
@@ -306,6 +350,24 @@ def build_measurement_workspace_v2(window):
             border: 1px solid #2B4050;
             border-radius: 5px;
             padding: 9px 11px;
+        }
+        QLabel#measurementV2CwStatus {
+            color: #8FA9B9;
+            padding-top: 3px;
+        }
+        QLabel#measurementV2CwResult {
+            color: #D6E4ED;
+            background-color: #14212B;
+            border: 1px solid #2B4050;
+            border-radius: 4px;
+            padding: 6px 9px;
+        }
+        QLabel#measurementV2GraphPlaceholder {
+            color: #718897;
+            background-color: #111B23;
+            border: 1px dashed #34495E;
+            border-radius: 6px;
+            padding: 24px;
         }
         """
     )
