@@ -27,6 +27,7 @@ from luxmeter_workspace_tabs import attach_luxmeter_workspace_tabs
 from tabbed_layout import organize_main_window_tabs
 from measurement_scroll_runtime import attach_measurement_scroll_runtime
 from measurement_runtime_v2 import attach_measurement_runtime_v2
+from visualization_workspace_v2 import attach_visualization_workspace_v2
 from luxmeter_scroll_runtime import attach_luxmeter_scroll_runtime
 from grid_results_runtime import attach_grid_results_runtime
 from results_workspace import attach_results_workspace
@@ -186,6 +187,7 @@ def main():
         )
 
     organize_main_window_tabs(window)
+    attach_visualization_workspace_v2(window)
     attach_effective_intensity_test(window)
     attach_p9710_mode_workspace(window)
     attach_p9710_continuous_runtime(window)
