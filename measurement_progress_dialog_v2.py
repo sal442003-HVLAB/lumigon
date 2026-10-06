@@ -102,7 +102,7 @@ class MeasurementProgressDialogV2(QDialog):
 
         self.abort_button = QPushButton("Abort Measurement")
         self.abort_button.setFixedWidth(180)
-        self.abort_button.clicked.connect(self._request_abort)
+        self.abort_button.clicked.connect(self.request_abort)
         buttons.addWidget(self.abort_button)
 
         self.close_button = QPushButton("Close")
@@ -184,16 +184,26 @@ class MeasurementProgressDialogV2(QDialog):
     def set_status(self, text: str):
         self.status_label.setText(str(text))
 
-    def update_progress(self, *, completed: int, total: int, remaining_s=None):
+    def update_progress(
+        self,
+        *,
+        completed: int,
+        total: int,
+        remaining_s=None,
+        percent=None,
+    ):
         self._completed = max(0, int(completed))
         self._total = max(0, int(total))
         self._remaining_s = remaining_s
 
-        percent = (
-            int(round(100.0 * self._completed / self._total))
-            if self._total > 0
-            else 0
-        )
+        if percent is None:
+            percent = (
+                int(round(100.0 * self._completed / self._total))
+                if self._total > 0
+                else 0
+            )
+        else:
+            percent = int(round(float(percent)))
         percent = max(0, min(100, percent))
         self.progress_bar.setValue(percent)
         self.progress_bar.setFormat(
@@ -240,7 +250,7 @@ class MeasurementProgressDialogV2(QDialog):
         self._update_clock()
         self._timer.stop()
 
-    def _request_abort(self):
+    def request_abort(self):
         if not self._running:
             return
         self.abort_button.setEnabled(False)
