@@ -91,15 +91,6 @@ def attach_luxmeter_workspace_tabs(window):
             border-bottom: 1px solid #2B4050;
         }
 
-        QLineEdit, QComboBox, QAbstractSpinBox {
-            background-color: #20282E;
-            color: #E7F2F8;
-            border: 1px solid #34495E;
-            border-radius: 4px;
-            padding: 5px 7px;
-            min-height: 20px;
-        }
-
         QTabWidget#luxmeterSubTabs > QTabBar::tab {
             background-color: #16232D;
             color: #BFCED8;
