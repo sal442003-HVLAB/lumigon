@@ -66,6 +66,11 @@ class P9710:
         self.serial = None
         self.version = None
         self.unit = None
+        self.trace_callback = None
+
+    def _trace_reply(self, command, raw, started, finished):
+        if self.trace_callback is not None:
+            self.trace_callback(str(command), raw, started, finished)
 
     @property
     def is_connected(self) -> bool:
@@ -123,6 +128,7 @@ class P9710:
             raise P9710Error("P-9710 is not connected.")
         ser = self.serial
         old_timeout = ser.timeout
+        started = time.perf_counter()
         if timeout_s is not None:
             ser.timeout = float(timeout_s)
         try:
@@ -135,13 +141,16 @@ class P9710:
         finally:
             ser.timeout = old_timeout
         if not raw:
+            self._trace_reply(command, "<NO RESPONSE>", started, time.perf_counter())
             raise P9710Error(f"No response to {command!r}.")
+        self._trace_reply(command, raw, started, time.perf_counter())
         return raw
 
     def command(self, command: str, wait_s: float = 0.02):
         if not self.is_connected:
             raise P9710Error("P-9710 is not connected.")
         ser = self.serial
+        started = time.perf_counter()
         ser.reset_input_buffer()
         ser.write((str(command).strip() + "\n").encode("ascii"))
         ser.flush()
@@ -150,9 +159,12 @@ class P9710:
         old_timeout = ser.timeout
         ser.timeout = 0.05
         try:
-            ser.readline()
+            raw = ser.readline().decode("ascii", errors="replace").strip()
         finally:
             ser.timeout = old_timeout
+        self._trace_reply(command, raw, started, time.perf_counter())
+        if raw.startswith("?") or raw == "*":
+            raise P9710Error(f"P-9710 rejected command {command!r}: {raw}")
 
     def read_mv(self, *, attempts: int = 3, retry_delay_s: float = 0.03) -> tuple[float, str, float, float]:
         attempts = max(1, int(attempts))
@@ -177,13 +189,23 @@ class P9710:
     def read_range_utilization(self) -> float:
         return parse_numeric_reply(self.query("GP", wait_s=0.005))
 
-    def configure_cw(self, *, integration_ms: float = 100.0, range_id: int = 5, sync_enabled: bool = False):
+    def configure_cw(self, *, integration_ms: float = 100.0, range_id: int = 5, sync_enabled: bool = False, verify: bool = False):
         if integration_ms < 0.1 or integration_ms > 6000.0:
             raise ValueError("CW integration time must be between 0.1 ms and 6000 ms.")
         self.command("SB0")
         self.command(f"SR{int(range_id)}")
         self.command(f"SN{int(round(float(integration_ms) * 10.0))}")
         self.command("SS1" if sync_enabled else "SS0")
+        if verify:
+            expected = {"GR": int(range_id), "GS0": 0,
+                        "GS3": int(round(float(integration_ms) * 10.0))}
+            for command, value in expected.items():
+                actual = parse_numeric_reply(self.query(command, wait_s=0.005))
+                if not math.isfinite(actual) or actual != value:
+                    raise P9710Error(
+                        f"P-9710 configuration mismatch: {command} returned "
+                        f"{actual:g}, expected {value}. Acquisition rejected."
+                    )
 
     def read_cw_snapshot(self, *, integration_ms: float = 100.0, range_id: int = 5, sync_enabled: bool = False) -> P9710CWReading:
         self.configure_cw(integration_ms=integration_ms, range_id=range_id, sync_enabled=sync_enabled)

@@ -23,7 +23,8 @@ class MeasurementRangeDisplayV2(QWidget):
             "Peak GP range utilization, not an uncertainty percentage. "
             "Target 10–90%; 90% is a software ceiling. Below 10%, the safer "
             "range is retained if the next gain would exceed 90%. "
-            "GP checks sampled peaks; brief unsampled transients remain unverified."
+            "GP alone has not been validated against the manufacturer's overload "
+            "indication on this meter. Brief unsampled transients remain unverified."
         )
         self.reset()
 
@@ -39,7 +40,7 @@ class MeasurementRangeDisplayV2(QWidget):
         prefix = f"R{range_id} • " if range_id is not None else ""
         number = f"{float(pct):.1f}% peak" if known else "—"
         captions = {
-            "within_target": "Within target",
+            "within_target": "GP within target • overload unverified",
             "low_utilization": "Low use • safer range retained",
             "over_limit": "Above 90% • acquisition rejected",
             "overload": "Overload • acquisition rejected",
@@ -49,7 +50,6 @@ class MeasurementRangeDisplayV2(QWidget):
         color = (
             "#EF6C6C" if state in {"overload", "over_limit"}
             else "#F2BE64" if state == "low_utilization"
-            else "#69C991" if state == "within_target"
             else "#9DD5F3"
         )
         self.label.setText(f"{prefix}{number} • {captions.get(state, phase)}")

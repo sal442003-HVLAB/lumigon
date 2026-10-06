@@ -38,3 +38,25 @@ Accepted V2 CSV schema 2.2 stores the final range, separate precheck/acquisition
 GP peaks, their maximum, GP check count, selection attempt count, method, and
 status. It saves accepted points only. Schema 2.0/2.1 remains loadable but its
 range checks are unverified. Plot exports state whether GP metadata exists.
+
+## Hardware discrepancy investigation
+
+The operator observed an overload indication in the manufacturer's software
+that was not detected by the GP-based check. That check must therefore not be
+presented as validated hardware overload detection. The display and plot export
+say that hardware overload detection is unverified; changing the percentage
+scale or threshold without the actual replies would hide the problem.
+
+One confirmed driver defect was reproduced: a `?2` reply to SR5 was discarded
+by `command()`. Commands now reject explicit error replies. Measurement reads
+GR, GS0, and GS3 after configuration to check the actual range, fixed-gain mode,
+and CW integration. A configuration mismatch rejects the acquisition. An
+explicit overload during configuration causes a retry at less gain.
+
+Each run also writes `<measurement-stem>_diagnostics.csv` beside the measurement
+CSV, tracing commands and exact replies with phase, point, requested range,
+and transaction timestamps. The diagnostics distinguish a rejected setting,
+different effective integration, literal GP scale, and a missing/status reply.
+The trace is closed and the driver's prior callback restored on success,
+failure, or abort. Compare the main CSV and diagnostic trace from the same
+previously overloaded angle before selecting another overload detection method.

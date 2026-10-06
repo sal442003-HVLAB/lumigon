@@ -323,6 +323,8 @@ class MeasurementV2Worker(QThread):
             self.msleep(max(1, min(50, int(remaining * 1000.0))))
 
     def _emit_range(self, range_id, phase, peak_pct=None, state="checking"):
+        self._diagnostic_range = range_id
+        self._diagnostic_phase = phase
         self.range_updated.emit({
             "range_id": range_id, "phase": phase,
             "peak_pct": peak_pct, "state": state,
@@ -361,11 +363,21 @@ class MeasurementV2Worker(QThread):
         return peak
 
     def _capture_waveform(self, range_id: int, *, precheck=False):
-        self.meter.configure_cw(
-            integration_ms=CW_INTEGRATION_MS,
-            range_id=range_id,
-            sync_enabled=False,
-        )
+        phase = "Range precheck" if precheck else "Acquisition"
+        self._emit_range(range_id, phase)
+        try:
+            self.meter.configure_cw(
+                integration_ms=CW_INTEGRATION_MS,
+                range_id=range_id,
+                sync_enabled=False,
+                verify=True,
+            )
+        except P9710Error as exc:
+            if self.meter._status_code(exc) == "overload":
+                self._emit_range(range_id, phase, None, "overload")
+                raise _RangeOverload(str(exc)) from exc
+            self._emit_range(range_id, phase, None, "unverified")
+            raise _RangeCheckFailed(str(exc)) from exc
         self.msleep(50)
 
         deadline = time.perf_counter() + FLASH_CAPTURE_S
@@ -374,8 +386,6 @@ class MeasurementV2Worker(QThread):
         highest_value = -math.inf
         lowest_value = math.inf
         gp_checks = 0
-        phase = "Range precheck" if precheck else "Acquisition"
-        self._emit_range(range_id, phase)
 
         while time.perf_counter() < deadline:
             self._check_abort()
@@ -601,6 +611,8 @@ class MeasurementV2Worker(QThread):
         started = datetime.now().astimezone()
         csv_path = None
         results = []
+        diagnostic_stream = None
+        previous_trace = getattr(self.meter, "trace_callback", None)
 
         try:
             if not self.points:
@@ -612,6 +624,28 @@ class MeasurementV2Worker(QThread):
 
             csv_path = self.output_path
             csv_path.parent.mkdir(parents=True, exist_ok=True)
+            diagnostic_path = csv_path.with_name(csv_path.stem + "_diagnostics.csv")
+            diagnostic_stream = diagnostic_path.open("w", newline="", encoding="utf-8")
+            diagnostic_writer = csv.DictWriter(diagnostic_stream, fieldnames=[
+                "point", "c_deg", "gamma_deg", "phase", "requested_range",
+                "command", "raw_reply", "started_perf_s", "finished_perf_s",
+            ])
+            diagnostic_writer.writeheader()
+            diagnostic_stream.flush()
+            self._diagnostic_point = {}
+
+            def trace_reply(command, raw, t1, t2):
+                diagnostic_writer.writerow({
+                    **self._diagnostic_point,
+                    "phase": getattr(self, "_diagnostic_phase", "Preparing"),
+                    "requested_range": getattr(self, "_diagnostic_range", ""),
+                    "command": command, "raw_reply": raw,
+                    "started_perf_s": t1, "finished_perf_s": t2,
+                })
+                if command != "MV":
+                    diagnostic_stream.flush()
+
+            self.meter.trace_callback = trace_reply
 
             fieldnames = [
                 "lumigon_format",
@@ -679,6 +713,9 @@ class MeasurementV2Worker(QThread):
 
                 for sequence, (c_deg, gamma_deg) in enumerate(self.points, start=1):
                     self._check_abort()
+                    self._diagnostic_point = {
+                        "point": sequence, "c_deg": c_deg, "gamma_deg": gamma_deg,
+                    }
                     self._emit_range(self.current_range_id, "Preparing next point")
 
                     current_c = self.motion.get_current_angle(C_AXIS)
@@ -823,6 +860,7 @@ class MeasurementV2Worker(QThread):
                     "started_at": started.isoformat(),
                     "completed_at": datetime.now().astimezone().isoformat(),
                     "csv_path": str(csv_path),
+                    "diagnostics_path": str(diagnostic_path),
                     "mode": self.mode,
                     "points": results,
                 }
@@ -845,6 +883,10 @@ class MeasurementV2Worker(QThread):
                 )
         except Exception as exc:
             self.failed.emit(str(exc))
+        finally:
+            self.meter.trace_callback = previous_trace
+            if diagnostic_stream is not None:
+                diagnostic_stream.close()
 
 
 def attach_measurement_runtime_v2(window):

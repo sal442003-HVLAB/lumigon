@@ -35,6 +35,7 @@ class FakeMeter:
         self.configurations = []
         self.transactions = []
         self.last_value = None
+        self.trace_callback = None
 
     def configure_cw(self, *, range_id, **kwargs):
         self.range_id = range_id
@@ -50,6 +51,8 @@ class FakeMeter:
         self.last_value = min(value, capacity)  # no error code on overload
         self.clock.value += 0.02
         self.transactions.append(("MV", self.last_value, t1))
+        if self.trace_callback is not None:
+            self.trace_callback("MV", str(self.last_value), t1, self.clock.value)
         return self.last_value, str(self.last_value), t1, self.clock.value
 
     def read_range_utilization(self):
@@ -58,6 +61,8 @@ class FakeMeter:
         capacity = 100.0 * 10.0 ** (5 - self.range_id)
         value = 100.0 * self.last_value / capacity
         self.transactions.append(("GP", value, self.clock.value))
+        if self.trace_callback is not None:
+            self.trace_callback("GP", str(value), self.clock.value - .01, self.clock.value)
         if isinstance(self.bad_gp, Exception):
             raise self.bad_gp
         return value if self.bad_gp is None else self.bad_gp
@@ -178,6 +183,32 @@ def test_gp_failure_during_acquisition_rejects_point(make_worker):
     assert meter.configurations == [5, 5]
 
 
+def test_explicit_overload_during_configuration_changes_range(make_worker):
+    worker, meter = make_worker()
+    original = meter.configure_cw
+    def configure(**kwargs):
+        if kwargs['range_id'] == 5:
+            meter.configurations.append(5)
+            raise P9710Error('P-9710 rejected SR5: ?16')
+        assert kwargs['verify'] is True
+        return original(**kwargs)
+    meter.configure_cw = configure
+    flash = worker._capture_one_flash()
+    assert meter.configurations == [5, 4, 4]
+    assert flash.range_id == 4
+
+
+def test_configuration_mismatch_cannot_accept_or_increase_gain(make_worker):
+    worker, meter = make_worker()
+    def configure(**kwargs):
+        meter.configurations.append(kwargs['range_id'])
+        raise P9710Error('P-9710 configuration mismatch: GR returned 4, expected 5')
+    meter.configure_cw = configure
+    with pytest.raises(runtime._RangeCheckFailed, match='configuration mismatch'):
+        worker._capture_one_flash()
+    assert meter.configurations == [5]
+
+
 def test_peak_gp_is_paired_before_next_mv_and_preserves_mv_timestamp(make_worker):
     worker, meter = make_worker()
     capture = worker._capture_waveform(5)
@@ -271,6 +302,21 @@ def test_failed_gp_writes_no_customer_measurement_row(make_worker):
     with worker.output_path.open() as stream:
         assert list(csv.DictReader(stream)) == []
     assert meter.configurations == [5, 5, 5]
+
+
+@pytest.mark.parametrize('failed', [False, True])
+def test_diagnostic_trace_is_saved_and_previous_callback_restored(make_worker, failed):
+    worker, meter = make_worker(bad_gp=P9710Error('No response to GP') if failed else None)
+    previous = lambda *args: None
+    meter.trace_callback = previous
+    worker.run()
+    assert meter.trace_callback is previous
+    diagnostic = worker.output_path.with_name(worker.output_path.stem + '_diagnostics.csv')
+    with diagnostic.open() as stream:
+        rows = list(csv.DictReader(stream))
+    assert {row['command'] for row in rows} >= {'MV', 'GP'}
+    assert all(row['point'] == '1' and row['requested_range'] == '5' for row in rows)
+    assert any(row['raw_reply'] == '40.0' for row in rows) if not failed else rows
 
 
 def test_display_handles_unknown_safe_low_and_over_limit(app):
