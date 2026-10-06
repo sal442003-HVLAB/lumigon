@@ -101,7 +101,12 @@ class MeasurementProgressDialogV2(QDialog):
         buttons.addStretch(1)
 
         self.abort_button = QPushButton("Abort Measurement")
+        self.abort_button.setObjectName("measurementAbortButton")
         self.abort_button.setFixedWidth(180)
+        self.abort_button.setToolTip(
+            "Controlled abort: acquisition stops at a safe checkpoint, then "
+            "Gamma and C return to 0°. Use the physical E-STOP for an emergency."
+        )
         self.abort_button.clicked.connect(self.request_abort)
         buttons.addWidget(self.abort_button)
 
@@ -153,6 +158,26 @@ class MeasurementProgressDialogV2(QDialog):
             QProgressBar::chunk {
                 background-color: #1769AA;
                 border-radius: 4px;
+            }
+            QPushButton#measurementAbortButton {
+                background-color: #C62828;
+                color: #FFFFFF;
+                border: 1px solid #EF5350;
+                border-radius: 5px;
+                padding: 7px 12px;
+                font-weight: 700;
+            }
+            QPushButton#measurementAbortButton:hover {
+                background-color: #D32F2F;
+                border-color: #FF6B6B;
+            }
+            QPushButton#measurementAbortButton:pressed {
+                background-color: #8E1B1B;
+            }
+            QPushButton#measurementAbortButton:disabled {
+                background-color: #5A2A2A;
+                color: #B9A0A0;
+                border-color: #6C3B3B;
             }
             """
         )
@@ -255,7 +280,7 @@ class MeasurementProgressDialogV2(QDialog):
             return
         self.abort_button.setEnabled(False)
         self.status_label.setText(
-            "Abort requested — finishing the current safe operation…"
+            "Abort requested — stopping safely, then returning both axes to 0°…"
         )
         self.abort_requested.emit()
 
