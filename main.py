@@ -204,14 +204,6 @@ def main():
     _apply_confirmed_axis_limits(window)
     attach_measurement_scroll_runtime(window)
 
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message=r'libpyside: Failed to disconnect \(None\) from signal "clicked\(\)"\.',
-            category=RuntimeWarning,
-        )
-        attach_test_plan_workspace(window)
-
     screen = app.primaryScreen()
     if screen is not None:
         window.setGeometry(screen.availableGeometry())
