@@ -11,6 +11,7 @@ import math
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
@@ -84,10 +85,16 @@ def build_measurement_workspace_v2(window):
     title_block.addWidget(subtitle)
     header.addLayout(title_block, 1)
 
-    status = QLabel("V2  •  SETUP")
+    status = QLabel("Ready — waiting to start")
     status.setObjectName("measurementV2Status")
-    status.setAlignment(Qt.AlignCenter)
-    status.setFixedWidth(150)
+    status.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+    status.setMinimumWidth(360)
+    status.setMaximumWidth(560)
+    status.setWordWrap(True)
+    status.setToolTip(
+        "Run status will show motion and acquisition activity here, for example: "
+        "moving to C, moving to Gamma, measuring, sample 1/3, sample 2/3, sample 3/3."
+    )
     header.addWidget(status, 0, Qt.AlignVCenter)
 
     root.addLayout(header)
@@ -119,12 +126,20 @@ def build_measurement_workspace_v2(window):
     distance.setValue(DEFAULT_DISTANCE_M)
     distance.setFixedWidth(150)
 
-    measurement_method = QLabel("Flashing LED  •  I-effective")
-    measurement_method.setObjectName("measurementV2Value")
+    measurement_mode = QComboBox()
+    measurement_mode.addItem(
+        "E-effective → I-effective",
+        "i_effective",
+    )
+    measurement_mode.addItem(
+        "CW maximum",
+        "cw_maximum",
+    )
+    measurement_mode.setFixedWidth(260)
 
     test_form.addRow("Sample:", sample_id)
     test_form.addRow("Distance:", distance)
-    test_form.addRow("Measurement:", measurement_method)
+    test_form.addRow("Measurement:", measurement_mode)
     left.addWidget(test_box)
 
     # End this card immediately after the angular resolution controls.
@@ -201,12 +216,14 @@ def build_measurement_workspace_v2(window):
     acquisition.setHorizontalSpacing(18)
     acquisition.setVerticalSpacing(8)
 
+    acquisition_method = QLabel()
+    acquisition_method.setObjectName("measurementV2Value")
+    acquisition_method.setWordWrap(True)
+
     acquisition.addWidget(QLabel("Photometer:"), 0, 0)
     acquisition.addWidget(QLabel("Gigahertz-Optik P-9710"), 0, 1)
     acquisition.addWidget(QLabel("Method:"), 1, 0)
-    acquisition.addWidget(QLabel("CW waveform → Schmidt-Clausen"), 1, 1)
-    acquisition.addWidget(QLabel("Samples / point:"), 2, 0)
-    acquisition.addWidget(QLabel("3 independent measurements"), 2, 1)
+    acquisition.addWidget(acquisition_method, 1, 1)
     acquisition.setColumnStretch(1, 1)
 
     left.addWidget(acquisition_box)
@@ -215,7 +232,7 @@ def build_measurement_workspace_v2(window):
     footer.setSpacing(10)
 
     ready_note = QLabel(
-        "At each C/Gamma point, three measurements will be checked for consistency before one validated value is stored."
+        "Each C/Gamma point is internally validated before one value is stored in the measurement table."
     )
     ready_note.setObjectName("measurementV2Note")
     ready_note.setWordWrap(True)
@@ -255,6 +272,21 @@ def build_measurement_workspace_v2(window):
 
     root.addLayout(body)
 
+    def set_status(text: str):
+        status.setText(str(text))
+
+    def update_measurement_mode(*_args):
+        mode = measurement_mode.currentData()
+        if mode == "cw_maximum":
+            acquisition_method.setText("CW maximum")
+        else:
+            acquisition_method.setText(
+                "CW waveform → Schmidt-Clausen → E-effective → I-effective"
+            )
+
+    measurement_mode.currentIndexChanged.connect(update_measurement_mode)
+    update_measurement_mode()
+
     def update_summary(*_args):
         c_count = _axis_count(c_start.value(), c_end.value(), c_step.value())
         gamma_count = _axis_count(
@@ -282,6 +314,9 @@ def build_measurement_workspace_v2(window):
     window.measurement_workspace = page
     window.measurement_v2_sample_id_edit = sample_id
     window.measurement_v2_distance_spin = distance
+    window.measurement_v2_mode_combo = measurement_mode
+    window.measurement_v2_status_label = status
+    window.measurement_v2_set_status = set_status
     window.measurement_v2_c_start = c_start
     window.measurement_v2_c_end = c_end
     window.measurement_v2_c_step = c_step
