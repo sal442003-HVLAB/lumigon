@@ -1,5 +1,4 @@
 import sys
-import warnings
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
@@ -20,37 +19,19 @@ from effective_intensity_test import attach_effective_intensity_test
 from p9710_mode_workspace import attach_p9710_mode_workspace
 from p9710_continuous_runtime import attach_p9710_continuous_runtime
 from p9710_flash_timing_runtime import attach_p9710_flash_timing_runtime
-from p9710_miol_grid_runtime import attach_p9710_miol_grid_runtime
-from p9710_miol_live_plot import attach_p9710_miol_live_plot
-from p9710_fullscan_safety import install_p9710_fullscan_safety
-from p9710_results_bridge import install_p9710_results_bridge
 from results_operator_refinements import (
     install_results_heatmap_orientation,
     attach_results_reload_control,
 )
 from luxmeter_workspace_tabs import attach_luxmeter_workspace_tabs
 from tabbed_layout import organize_main_window_tabs
-from execution_mode_controls import attach_execution_mode_controls
-from measurement_ui_fixes import attach_measurement_ui_fixes
 from measurement_scroll_runtime import attach_measurement_scroll_runtime
 from luxmeter_scroll_runtime import attach_luxmeter_scroll_runtime
-from measurement_profile_catalog import attach_measurement_profile_catalog
-from measurement_profile_layout import attach_measurement_profile_layout
-from obstacle_profile_workflow import attach_obstacle_profile_workflow
-from test_plan_workspace import attach_test_plan_workspace
-from test_plan_runtime_improvements import install_test_plan_runtime_improvements
-from run_progress_refinement import install_run_progress_refinement
-from grid_step_runtime import install_grid_step_runtime, attach_grid_step_runtime
-from test_plan_reuse_eta_refinement import install_test_plan_reuse_eta_refinement
-from grid_validation_ui import attach_grid_validation_ui
 from grid_results_runtime import attach_grid_results_runtime
-from measurement_results_runtime import install_measurement_results_runtime
 from results_workspace import attach_results_workspace
 from results_preload_refinement import attach_results_preload_refinement
 from results_viewport_fix import attach_results_viewport_fix
 from luxmeter_resilience import install_phamp_connect_retry
-from miol_profile_runtime import attach_miol_profile_runtime
-from miol_capture_monitor import attach_miol_capture_monitor
 from miol_results_runtime import attach_miol_results_runtime
 
 from machine_config import (
@@ -188,13 +169,6 @@ def main():
     app.setApplicationVersion(APP_VERSION)
 
     install_phamp_connect_retry()
-    install_test_plan_runtime_improvements()
-    install_run_progress_refinement()
-    install_grid_step_runtime()
-    install_test_plan_reuse_eta_refinement()
-    install_measurement_results_runtime()
-    install_p9710_fullscan_safety()
-    install_p9710_results_bridge()
 
     window = MainWindow()
     attach_motor_control_refinement(window)
@@ -228,17 +202,6 @@ def main():
     install_results_heatmap_orientation()
     attach_results_reload_control(window)
     _apply_confirmed_axis_limits(window)
-    attach_execution_mode_controls(window)
-    attach_measurement_ui_fixes(window)
-    attach_miol_profile_runtime(window)
-    attach_p9710_miol_grid_runtime(window)
-    attach_p9710_miol_live_plot(window)
-    attach_miol_capture_monitor(window)
-    attach_measurement_profile_catalog(window)
-    attach_obstacle_profile_workflow(window)
-    attach_measurement_profile_layout(window)
-    attach_grid_step_runtime(window)
-    attach_grid_validation_ui(window)
     attach_measurement_scroll_runtime(window)
 
     with warnings.catch_warnings():
