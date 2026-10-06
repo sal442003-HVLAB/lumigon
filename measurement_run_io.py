@@ -184,12 +184,21 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
         )
 
     schema_version = str(first.get("schema_version", "")).strip()
-    if schema_version not in {"2.0", "2.1"}:
+    if schema_version not in {"2.0", "2.1", "2.2"}:
         raise ValueError(
             f"Unsupported Lumigon Measurement V2 schema: {schema_version or '<blank>'}"
         )
-    if schema_version == "2.1" and "sample_count" not in first:
+    if schema_version in {"2.1", "2.2"} and "sample_count" not in first:
         raise ValueError("Missing V2 column(s): sample_count")
+    if schema_version == "2.2":
+        range_columns = {
+            "range_ids", "range_peak_utilization_pct", "range_precheck_peak_pct",
+            "range_acquisition_peak_pct", "range_check_status", "range_check_method",
+            "range_check_count", "range_selection_attempts",
+        }
+        missing = sorted(range_columns.difference(first))
+        if missing:
+            raise ValueError("Missing V2 range-check column(s): " + ", ".join(missing))
 
     mode = str(first.get("mode", "")).strip()
     if mode not in {"i_effective", "cw_maximum"}:
@@ -303,6 +312,29 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
             lux_value = cw_lx
             candela_value = None
 
+        range_pct = None
+        range_status = "unverified"
+        if schema_version == "2.2":
+            range_pct = required_number(row, "range_peak_utilization_pct", row_number)
+            precheck_pct = required_number(row, "range_precheck_peak_pct", row_number)
+            capture_pct = required_number(row, "range_acquisition_peak_pct", row_number)
+            if not (0 < range_pct <= 90 and 0 <= precheck_pct <= 90 and 0 < capture_pct <= 90):
+                raise ValueError(f"Row {row_number}: range utilization must be verified and at most 90%.")
+            if not math.isclose(range_pct, max(precheck_pct, capture_pct), rel_tol=1e-9, abs_tol=1e-9):
+                raise ValueError(f"Row {row_number}: inconsistent range utilization peaks.")
+            range_status = str(row["range_check_status"]).strip()
+            expected_status = "within_target" if range_pct >= 10 else "low_utilization"
+            if range_status != expected_status:
+                raise ValueError(f"Row {row_number}: inconsistent range_check_status.")
+            if row["range_check_method"] != "GP precheck + acquisition extrema":
+                raise ValueError(f"Row {row_number}: unsupported range_check_method.")
+            range_id = required_number(row, "range_ids", row_number)
+            if not range_id.is_integer() or not 0 <= range_id <= 7:
+                raise ValueError(f"Row {row_number}: range_ids must be one integer from 0 to 7.")
+            if required_number(row, "range_check_count", row_number, integer=True) < 2:
+                raise ValueError(f"Row {row_number}: both precheck and acquisition GP checks are required.")
+            required_number(row, "range_selection_attempts", row_number, integer=True)
+
         points.append(
             MeasurementPoint(
                 point=point_id,
@@ -317,6 +349,8 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
                 integration_ms=0,
                 execution_mode="V2 Step Scan",
                 status="Measured",
+                range_utilization_pct=range_pct,
+                range_check_status=range_status,
             )
         )
 

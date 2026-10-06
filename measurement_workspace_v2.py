@@ -11,6 +11,7 @@ import math
 
 from PySide6.QtCore import Qt
 from measurement_graph_v2 import CPlaneGraphV2
+from measurement_range_display_v2 import MeasurementRangeDisplayV2
 from measurement_run import measurement_data_directory
 
 from PySide6.QtWidgets import (
@@ -259,6 +260,9 @@ def build_measurement_workspace_v2(window):
     acquisition.addWidget(QLabel("Gigahertz-Optik P-9710"), 0, 1)
     acquisition.addWidget(QLabel("Method:"), 1, 0)
     acquisition.addWidget(acquisition_method, 1, 1)
+    range_display = MeasurementRangeDisplayV2()
+    acquisition.addWidget(QLabel("Range use:"), 2, 0)
+    acquisition.addWidget(range_display, 2, 1)
     acquisition.setColumnStretch(1, 1)
 
     left.addWidget(acquisition_box)
@@ -346,6 +350,7 @@ def build_measurement_workspace_v2(window):
     window.measurement_v2_browse_folder_button = browse_folder_button
     window.measurement_v2_mode_combo = measurement_mode
     window.measurement_v2_status_label = status
+    window.measurement_v2_range_display = range_display
     window.measurement_v2_set_status = set_status
     window.measurement_v2_c_start = c_start
     window.measurement_v2_c_end = c_end

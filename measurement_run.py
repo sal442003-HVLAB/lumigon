@@ -30,6 +30,8 @@ class MeasurementPoint:
     integration_ms: int
     execution_mode: str
     status: str = "Measured"
+    range_utilization_pct: Optional[float] = None
+    range_check_status: str = "unverified"
 
     @classmethod
     def from_result(cls, result: dict) -> "MeasurementPoint":

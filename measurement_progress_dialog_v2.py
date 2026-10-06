@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import time
 
 from PySide6.QtCore import QTimer, Qt, Signal
+from measurement_range_display_v2 import MeasurementRangeDisplayV2
 from PySide6.QtWidgets import (
     QDialog,
     QGridLayout,
@@ -65,6 +66,8 @@ class MeasurementProgressDialogV2(QDialog):
         self.status_label.setWordWrap(True)
         self.status_label.setMinimumHeight(56)
         root.addWidget(self.status_label)
+        self.range_display = MeasurementRangeDisplayV2()
+        root.addWidget(self.range_display)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)

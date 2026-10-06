@@ -574,7 +574,14 @@ class VisualizationWorkspaceV2(QWidget):
             f"ΔC {_step_text(c_values)} • ΔGamma {_step_text(gamma_values)} • "
             f"{'Observed grid filled' if complete else 'Partial grid'} • scan completion unverified"
         )
-        self.summary_label.setToolTip(f"{self.grid_label.text()}\n{interpolation_text}\nICAO compliance NOT EVALUATED")
+        self.summary_label.setToolTip(f"{self.grid_label.text()}\n{interpolation_text}\n{self._range_check_note()}\nICAO compliance NOT EVALUATED")
+
+    def _range_check_note(self):
+        checked = [p for p in self.run.points if p.range_check_status in {"within_target", "low_utilization"}]
+        low = sum(p.range_check_status == "low_utilization" for p in checked)
+        if not checked:
+            return "Range use: UNVERIFIED (no GP metadata)"
+        return f"Range GP checks: {len(checked)}/{len(self.run.points)} points; {low} below 10%"
 
     def _quantity_changed(self, *_args):
         self._quantity = self.quantity_combo.currentData() or "candela"
@@ -900,7 +907,7 @@ class VisualizationWorkspaceV2(QWidget):
         header = figure.text(0.02, 0.985, f"Lumigon | Sample: {run.sample_id} | Distance: {run.distance_m:g} m\nStart: {run.started_at.isoformat(timespec='seconds')} | Source: {source}", color="#CFDDE6", fontsize=8, va="top")
         c, g, matrix = self._grid
         coverage = f"Finite nodes: {np.isfinite(matrix).sum()}/{matrix.size} | ΔC {_step_text(c)} | ΔGamma {_step_text(g)}"
-        footer = figure.text(0.02, -0.01, coverage + " | Scan completion unverified\n" + (f"Source SHA-256: {self._source_sha256}" if self._source_sha256 else "Source file checksum unavailable"), color="#90A8B8", fontsize=7, va="top")
+        footer = figure.text(0.02, -0.01, coverage + " | Scan completion unverified\n" + self._range_check_note() + "\n" + (f"Source SHA-256: {self._source_sha256}" if self._source_sha256 else "Source file checksum unavailable"), color="#90A8B8", fontsize=7, va="top")
         try:
             figure.savefig(filename, dpi=220, bbox_inches="tight")
         finally:

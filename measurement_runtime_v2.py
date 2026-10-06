@@ -18,7 +18,7 @@ import math
 import re
 import statistics
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -42,6 +42,9 @@ SCHMIDT_CLAUSEN_C_S = 0.2
 SETTLE_S = 0.20
 MAX_POINT_ATTEMPTS = 3
 MIN_MODULATION_LX = 0.0005
+RANGE_TARGET_MIN_PCT = 10.0
+RANGE_MAX_PCT = 90.0
+MAX_RANGE_SELECTION_ATTEMPTS = 16
 
 
 class _AbortRequested(RuntimeError):
@@ -50,6 +53,17 @@ class _AbortRequested(RuntimeError):
 
 class _RangeOverload(RuntimeError):
     pass
+
+
+class _RangeCheckFailed(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class RangeCheckedCapture:
+    samples: list
+    peak_utilization_pct: float
+    gp_checks: int
 
 
 @dataclass(frozen=True)
@@ -62,6 +76,12 @@ class FlashSample:
     pulse_duration_ms: float
     integral_lx_s: float
     median_dt_ms: float
+    range_peak_utilization_pct: float | None = None
+    range_precheck_peak_pct: float | None = None
+    range_acquisition_peak_pct: float | None = None
+    range_check_count: int = 0
+    range_selection_attempts: int = 0
+    range_check_status: str = "unverified"
 
 
 def _percentile(values, fraction: float) -> float:
@@ -264,6 +284,7 @@ class MeasurementV2Worker(QThread):
     status = Signal(str)
     progress = Signal(object)
     point_accepted = Signal(object)
+    range_updated = Signal(object)
     completed = Signal(object)
     aborted = Signal(str)
     failed = Signal(str)
@@ -301,7 +322,45 @@ class MeasurementV2Worker(QThread):
             remaining = deadline - time.monotonic()
             self.msleep(max(1, min(50, int(remaining * 1000.0))))
 
-    def _capture_waveform(self, range_id: int):
+    def _emit_range(self, range_id, phase, peak_pct=None, state="checking"):
+        self.range_updated.emit({
+            "range_id": range_id, "phase": phase,
+            "peak_pct": peak_pct, "state": state,
+        })
+
+    def _read_checked_gp(self, range_id, phase, previous_peak):
+        self._check_abort()
+        try:
+            utilization = abs(float(self.meter.read_range_utilization()))
+        except Exception as exc:
+            status = self.meter._status_code(exc)
+            if status == "overload":
+                self._emit_range(range_id, phase, previous_peak, "overload")
+                raise _RangeOverload("P-9710 GP reported overload.") from exc
+            if status == "underload":
+                # An explicit underload status in the dark phase is not a
+                # missing reply. A positive bright-phase GP is still required.
+                utilization = 0.0
+            else:
+                self._emit_range(range_id, phase, previous_peak, "unverified")
+                raise _RangeCheckFailed(
+                    "Range check failed: no valid GP response. Point cannot be accepted."
+                ) from exc
+        if not math.isfinite(utilization):
+            self._emit_range(range_id, phase, previous_peak, "unverified")
+            raise _RangeCheckFailed("Range check failed: GP must be finite.")
+        peak = max(previous_peak, utilization)
+        self._emit_range(
+            range_id, phase, peak,
+            "over_limit" if peak > RANGE_MAX_PCT else "checking",
+        )
+        if peak > RANGE_MAX_PCT:
+            raise _RangeOverload(
+                f"Range use {peak:.1f}% exceeds the {RANGE_MAX_PCT:g}% ceiling."
+            )
+        return peak
+
+    def _capture_waveform(self, range_id: int, *, precheck=False):
         self.meter.configure_cw(
             integration_ms=CW_INTEGRATION_MS,
             range_id=range_id,
@@ -311,6 +370,12 @@ class MeasurementV2Worker(QThread):
 
         deadline = time.perf_counter() + FLASH_CAPTURE_S
         samples = []
+        peak_pct = 0.0
+        highest_value = -math.inf
+        lowest_value = math.inf
+        gp_checks = 0
+        phase = "Range precheck" if precheck else "Acquisition"
+        self._emit_range(range_id, phase)
 
         while time.perf_counter() < deadline:
             self._check_abort()
@@ -322,7 +387,8 @@ class MeasurementV2Worker(QThread):
             except P9710Error as exc:
                 status = self.meter._status_code(exc)
                 if status == "overload":
-                    raise _RangeOverload() from exc
+                    self._emit_range(range_id, phase, peak_pct, "overload")
+                    raise _RangeOverload("P-9710 MV reported overload.") from exc
                 if status == "underload":
                     samples.append((time.perf_counter(), 0.0))
                     continue
@@ -332,50 +398,86 @@ class MeasurementV2Worker(QThread):
                     continue
                 raise
 
-            if math.isfinite(value):
-                samples.append(((t1 + t2) / 2.0, max(0.0, float(value))))
+            if not math.isfinite(value):
+                raise _RangeCheckFailed("Non-finite MV sample: acquisition rejected.")
+            # GP describes the LAST MV, so it must be read before another MV.
+            # Precheck polls every sample. During acquisition check new extrema
+            # in BOTH directions, including negative offset-corrected readings.
+            # Other samples are bounded by directly checked extrema. Do not
+            # poll once at the end (which may be the dark phase).
+            if precheck or value > highest_value or value < lowest_value:
+                peak_pct = self._read_checked_gp(range_id, phase, peak_pct)
+                gp_checks += 1
+                highest_value = max(highest_value, value)
+                lowest_value = min(lowest_value, value)
+            # Timestamp the MV transaction, not the following GP transaction.
+            samples.append(((t1 + t2) / 2.0, max(0.0, float(value))))
 
-        return samples
+        if gp_checks == 0:
+            raise _RangeCheckFailed("No numeric MV/GP pair was captured.")
+        return RangeCheckedCapture(samples, peak_pct, gp_checks)
 
     def _capture_one_flash(self):
         range_id = int(self.current_range_id)
         last_error = None
 
-        for _attempt in range(6):
+        # Remember ranges that crossed the ceiling at THIS point. This avoids
+        # oscillation between e.g. R4=9.5% and R5=95%.
+        rejected_ranges = set()
+        for selection_attempt in range(1, MAX_RANGE_SELECTION_ATTEMPTS + 1):
             self._check_abort()
             try:
-                samples = self._capture_waveform(range_id)
-                flash = analyse_single_flash(samples)
-                flash = FlashSample(
-                    range_id=range_id,
-                    baseline_lx=flash.baseline_lx,
-                    cw_max_lx=flash.cw_max_lx,
-                    net_peak_lx=flash.net_peak_lx,
-                    e_effective_lx=flash.e_effective_lx,
-                    pulse_duration_ms=flash.pulse_duration_ms,
-                    integral_lx_s=flash.integral_lx_s,
-                    median_dt_ms=flash.median_dt_ms,
+                self.status.emit(f"Checking flash range on R{range_id}")
+                precheck = self._capture_waveform(range_id, precheck=True)
+                analyse_single_flash(precheck.samples)
+                pct = precheck.peak_utilization_pct
+                # Tenfold gain is only a candidate-selection estimate. Always
+                # measure GP on the new range before using it for acquisition.
+                if (pct < RANGE_TARGET_MIN_PCT and pct * 10.0 <= RANGE_MAX_PCT
+                        and range_id < 7 and range_id + 1 not in rejected_ranges):
+                    range_id += 1
+                    self.status.emit(f"Low range use — checking more sensitive R{range_id}")
+                    continue
+                self.status.emit(f"Acquiring flash on fixed R{range_id}")
+                capture = self._capture_waveform(range_id)
+                flash = analyse_single_flash(capture.samples)
+                peak_pct = max(pct, capture.peak_utilization_pct)
+                if capture.peak_utilization_pct <= 0.0:
+                    self._emit_range(range_id, "Acquisition", None, "unverified")
+                    raise _RangeCheckFailed("GP did not resolve any range use during the flash.")
+                check_status = (
+                    "within_target" if peak_pct >= RANGE_TARGET_MIN_PCT
+                    else "low_utilization"
+                )
+                flash = replace(
+                    flash, range_id=range_id,
+                    range_peak_utilization_pct=peak_pct,
+                    range_precheck_peak_pct=pct,
+                    range_acquisition_peak_pct=capture.peak_utilization_pct,
+                    range_check_count=precheck.gp_checks + capture.gp_checks,
+                    range_selection_attempts=selection_attempt,
+                    range_check_status=check_status,
                 )
                 self.current_range_id = range_id
+                self._emit_range(range_id, "Accepted point", peak_pct, check_status)
                 return flash
             except _AbortRequested:
                 raise
-            except _RangeOverload:
-                last_error = "P-9710 range overloaded."
+            except _RangeOverload as exc:
+                last_error = str(exc)
+                rejected_ranges.add(range_id)
                 if range_id <= 0:
                     raise RuntimeError(last_error)
                 range_id -= 1
                 self.status.emit(
-                    f"Range overload — retrying on R{range_id}"
+                    f"{last_error} Retrying full point capture on less sensitive R{range_id}"
                 )
-            except RuntimeError as exc:
-                last_error = str(exc)
-                if range_id >= 7:
-                    raise
-                range_id += 1
-                self.status.emit(
-                    f"Flash not resolved — retrying on more sensitive R{range_id}"
-                )
+            # Missing GP or an incomplete flash must NOT increase gain blindly.
+            # The outer point retry keeps the current checked range.
+            except RuntimeError:
+                self.current_range_id = range_id
+                self._emit_range(range_id, "Acquisition invalid", None, "unverified")
+                raise
 
         raise RuntimeError(last_error or "Could not acquire a valid optical flash.")
 
@@ -484,6 +586,7 @@ class MeasurementV2Worker(QThread):
                 + self._estimated_move_seconds(GAMMA, gamma_deg - previous_gamma)
                 + SETTLE_S
                 + FLASH_CAPTURE_S
+                + FLASH_CAPTURE_S  # independent GP range precheck
                 + 0.15
             )
             point_estimates.append(duration)
@@ -530,6 +633,13 @@ class MeasurementV2Worker(QThread):
                 "max_deviation_pct",
                 "tolerance_pct",
                 "range_ids",
+                "range_peak_utilization_pct",
+                "range_precheck_peak_pct",
+                "range_acquisition_peak_pct",
+                "range_check_status",
+                "range_check_method",
+                "range_check_count",
+                "range_selection_attempts",
                 "mean_baseline_lx",
                 "mean_net_peak_lx",
                 "mean_pulse_duration_ms",
@@ -569,6 +679,7 @@ class MeasurementV2Worker(QThread):
 
                 for sequence, (c_deg, gamma_deg) in enumerate(self.points, start=1):
                     self._check_abort()
+                    self._emit_range(self.current_range_id, "Preparing next point")
 
                     current_c = self.motion.get_current_angle(C_AXIS)
                     if abs(current_c - c_deg) > 0.01:
@@ -610,7 +721,7 @@ class MeasurementV2Worker(QThread):
 
                     result = {
                         "lumigon_format": "Lumigon Measurement V2",
-                        "schema_version": "2.1",
+                        "schema_version": "2.2",
                         "sample_id": self.sample_id,
                         "sample_count": 1,
                         "run_started_at": started.isoformat(),
@@ -628,6 +739,13 @@ class MeasurementV2Worker(QThread):
                         "max_deviation_pct": "",
                         "tolerance_pct": "",
                         "range_ids": str(flash.range_id),
+                        "range_peak_utilization_pct": flash.range_peak_utilization_pct,
+                        "range_precheck_peak_pct": flash.range_precheck_peak_pct,
+                        "range_acquisition_peak_pct": flash.range_acquisition_peak_pct,
+                        "range_check_status": flash.range_check_status,
+                        "range_check_method": "GP precheck + acquisition extrema",
+                        "range_check_count": flash.range_check_count,
+                        "range_selection_attempts": flash.range_selection_attempts,
                         "mean_baseline_lx": flash.baseline_lx,
                         "mean_net_peak_lx": flash.net_peak_lx,
                         "mean_pulse_duration_ms": flash.pulse_duration_ms,
@@ -833,6 +951,14 @@ def attach_measurement_runtime_v2(window):
         if graph is not None:
             graph.add_point(item)
 
+    def on_range(payload):
+        display = getattr(window, "measurement_v2_range_display", None)
+        if display is not None:
+            display.update_range(payload)
+        dialog = getattr(window, "measurement_v2_progress_dialog", None)
+        if dialog is not None:
+            dialog.range_display.update_range(payload)
+
     def on_progress(payload):
         dialog = getattr(window, "measurement_v2_progress_dialog", None)
         if dialog is None:
@@ -1025,6 +1151,7 @@ def attach_measurement_runtime_v2(window):
 
         window.measurement_v2_results = []
         window.measurement_v2_last_run = None
+        window.measurement_v2_range_display.reset()
 
         graph = getattr(window, "measurement_v2_graph", None)
         if graph is not None:
@@ -1070,6 +1197,7 @@ def attach_measurement_runtime_v2(window):
         worker.status.connect(progress_dialog.set_status)
         worker.progress.connect(on_progress)
         worker.point_accepted.connect(on_point)
+        worker.range_updated.connect(on_range)
         worker.completed.connect(on_completed)
         worker.aborted.connect(on_aborted)
         worker.failed.connect(on_failed)
