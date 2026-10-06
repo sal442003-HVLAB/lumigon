@@ -8,7 +8,6 @@ needed for the goniophotometric run.
 from __future__ import annotations
 
 import math
-from pathlib import Path
 
 from PySide6.QtCore import Qt
 from measurement_graph_v2 import CPlaneGraphV2
@@ -344,6 +343,7 @@ def build_measurement_workspace_v2(window):
     window.measurement_v2_distance_spin = distance
     window.measurement_v2_file_name_edit = file_name_edit
     window.measurement_v2_save_folder_edit = save_folder_edit
+    window.measurement_v2_browse_folder_button = browse_folder_button
     window.measurement_v2_mode_combo = measurement_mode
     window.measurement_v2_status_label = status
     window.measurement_v2_set_status = set_status
