@@ -96,8 +96,8 @@ def build_measurement_workspace_v2(window):
     status.setMaximumWidth(560)
     status.setWordWrap(True)
     status.setToolTip(
-        "Run status will show motion and acquisition activity here, for example: "
-        "moving to C, moving to Gamma, measuring, sample 1/3, sample 2/3, sample 3/3."
+        "Run status shows motion and acquisition activity here, for example: "
+        "moving to C, moving to Gamma, measuring the current point, or returning to zero."
     )
     header.addWidget(status, 0, Qt.AlignVCenter)
 
@@ -267,7 +267,7 @@ def build_measurement_workspace_v2(window):
     footer.setSpacing(10)
 
     ready_note = QLabel(
-        "Each C/Gamma point is internally validated before one value is stored in the measurement table."
+        "Each C/Gamma point stores one valid flash acquisition. Invalid or incomplete acquisitions are retried automatically."
     )
     ready_note.setObjectName("measurementV2Note")
     ready_note.setWordWrap(True)
