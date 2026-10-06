@@ -10,6 +10,7 @@ I-effective = E-effective × distance² relationship before they are accepted.
 from __future__ import annotations
 
 import csv
+import math
 import re
 from datetime import datetime
 from pathlib import Path
@@ -178,7 +179,7 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
         raise ValueError(f"Unsupported V2 measurement mode: {mode or '<blank>'}")
 
     distance_m = _float(first.get("distance_m"))
-    if distance_m <= 0.0:
+    if not math.isfinite(distance_m) or distance_m <= 0.0:
         raise ValueError("Measurement distance must be greater than zero.")
 
     sample_id = str(first.get("sample_id", "Unspecified")).strip() or "Unspecified"
@@ -208,6 +209,10 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
 
         c_deg = _float(row.get("c_deg"))
         gamma_deg = _float(row.get("gamma_deg"))
+        if not math.isfinite(c_deg) or not math.isfinite(gamma_deg):
+            raise ValueError(
+                f"Row {row_number}: C/Gamma coordinates must be finite numbers."
+            )
         coordinate = (round(c_deg, 9), round(gamma_deg, 9))
         if coordinate in coordinates:
             raise ValueError(
@@ -219,7 +224,12 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
         if mode == "i_effective":
             e_lx = _float_or_none(row.get("accepted_e_effective_lx"))
             i_cd = _float_or_none(row.get("accepted_i_effective_cd"))
-            if e_lx is None or i_cd is None:
+            if (
+                e_lx is None
+                or i_cd is None
+                or not math.isfinite(e_lx)
+                or not math.isfinite(i_cd)
+            ):
                 raise ValueError(
                     f"Row {row_number}: E-effective and I-effective are both required."
                 )
@@ -235,7 +245,7 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
             candela_value = i_cd
         else:
             cw_lx = _float_or_none(row.get("accepted_cw_maximum_lx"))
-            if cw_lx is None:
+            if cw_lx is None or not math.isfinite(cw_lx):
                 raise ValueError(
                     f"Row {row_number}: accepted CW maximum is missing."
                 )
