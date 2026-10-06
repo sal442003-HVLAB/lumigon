@@ -336,36 +336,15 @@ def organize_main_window_tabs(window):
     measurement_tab = build_measurement_workspace_v2(window)
 
     visualization_tab = _placeholder_tab(
-        "Visualization",
+        "Result",
         "Reserved for customer-facing C × Gamma isocandela maps, 3D distribution, "
         "C-plane analysis and standards overlays.",
-    )
-
-    results_tab = _placeholder_tab(
-        "Results",
-        "Reserved for intensity tables, polar/candela diagrams, test progress, "
-        "saved measurement sets and export/report functions.",
-    )
-
-    safety_tab = _placeholder_tab(
-        "Safety & I/O",
-        "Reserved for HOME and LIMIT sensors, E-STOP/safety-chain status, "
-        "Pilz safety relay state, drive digital I/O and commissioning diagnostics.",
-    )
-
-    settings_tab = _placeholder_tab(
-        "Settings & Diagnostics",
-        "Reserved for communication ports, axis limits, calibration/scaling, "
-        "luxmeter sensitivity, default acquisition parameters and system diagnostics.",
     )
 
     tabs.addTab(motor_tab, "Motor Control")
     tabs.addTab(luxmeter_tab, "Luxmeter")
     tabs.addTab(measurement_tab, "Measurement")
-    tabs.addTab(visualization_tab, "Visualization")
-    tabs.addTab(results_tab, "Results")
-    tabs.addTab(safety_tab, "Safety & I/O")
-    tabs.addTab(settings_tab, "Settings")
+    tabs.addTab(visualization_tab, "Result")
 
     root.addWidget(tabs, 1)
 
@@ -374,9 +353,7 @@ def organize_main_window_tabs(window):
     window.luxmeter_tab = luxmeter_tab
     window.measurement_tab = measurement_tab
     window.visualization_tab = visualization_tab
-    window.results_tab = results_tab
-    window.safety_tab = safety_tab
-    window.settings_tab = settings_tab
+    window.result_tab = visualization_tab
 
     window.setStyleSheet(
         window.styleSheet()
@@ -440,6 +417,13 @@ def organize_main_window_tabs(window):
         QTabBar::tab:hover:!selected {
             background-color: #1C303F;
             color: #FFFFFF;
+        }
+
+        QTabWidget#mainTabs > QTabBar::tab {
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            border-bottom-left-radius: 0px;
+            border-bottom-right-radius: 0px;
         }
 
         QLabel#tabSectionTitle {

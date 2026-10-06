@@ -19,22 +19,13 @@ from effective_intensity_test import attach_effective_intensity_test
 from p9710_mode_workspace import attach_p9710_mode_workspace
 from p9710_continuous_runtime import attach_p9710_continuous_runtime
 from p9710_flash_timing_runtime import attach_p9710_flash_timing_runtime
-from results_operator_refinements import (
-    install_results_heatmap_orientation,
-    attach_results_reload_control,
-)
 from luxmeter_workspace_tabs import attach_luxmeter_workspace_tabs
 from tabbed_layout import organize_main_window_tabs
 from measurement_scroll_runtime import attach_measurement_scroll_runtime
 from measurement_runtime_v2 import attach_measurement_runtime_v2
 from visualization_workspace_v2 import attach_visualization_workspace_v2
 from luxmeter_scroll_runtime import attach_luxmeter_scroll_runtime
-from grid_results_runtime import attach_grid_results_runtime
-from results_workspace import attach_results_workspace
-from results_preload_refinement import attach_results_preload_refinement
-from results_viewport_fix import attach_results_viewport_fix
 from luxmeter_resilience import install_phamp_connect_retry
-from miol_results_runtime import attach_miol_results_runtime
 
 from machine_config import (
     GAMMA_LIMIT_DEG,
@@ -196,15 +187,6 @@ def main():
     attach_p9710_flash_timing_runtime(window)
     attach_measurement_runtime_v2(window)
 
-    attach_results_workspace(window)
-    attach_results_preload_refinement(window)
-    attach_results_viewport_fix(window)
-    attach_grid_results_runtime(window)
-    attach_miol_results_runtime(window)
-    # Install this last because grid/MIOL visual refinement layers may replace
-    # GridResultsCharts._draw_heatmap during their own setup.
-    install_results_heatmap_orientation()
-    attach_results_reload_control(window)
     _apply_confirmed_axis_limits(window)
     attach_measurement_scroll_runtime(window)
 

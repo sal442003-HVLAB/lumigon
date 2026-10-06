@@ -95,7 +95,7 @@ class VisualizationWorkspaceV2(QWidget):
         title_block = QVBoxLayout()
         title_block.setSpacing(1)
 
-        title = QLabel("Visualization")
+        title = QLabel("Result")
         title.setObjectName("visualizationTitle")
         title_block.addWidget(title)
         header.addLayout(title_block, 1)
@@ -439,7 +439,7 @@ class VisualizationWorkspaceV2(QWidget):
             if show_errors:
                 QMessageBox.critical(
                     self,
-                    "Load Visualization Data",
+                    "Load Result Data",
                     f"The measurement file failed integrity/format validation:\n\n{exc}",
                 )
             return False
@@ -461,7 +461,7 @@ class VisualizationWorkspaceV2(QWidget):
         if not payload:
             QMessageBox.information(
                 self,
-                "Visualization",
+                "Result",
                 "No completed Version 2 measurement is available in this session yet.",
             )
             return
@@ -470,7 +470,7 @@ class VisualizationWorkspaceV2(QWidget):
         if not path:
             QMessageBox.warning(
                 self,
-                "Visualization",
+                "Result",
                 "The latest measurement has no saved CSV path.",
             )
             return
@@ -583,7 +583,7 @@ class VisualizationWorkspaceV2(QWidget):
         try:
             self._grid = self._build_grid()
         except Exception as exc:
-            QMessageBox.critical(self, "Visualization Data Error", str(exc))
+            QMessageBox.critical(self, "Result Data Error", str(exc))
             return
         self._update_metadata()
         self._populate_cplanes()
@@ -926,7 +926,7 @@ class VisualizationWorkspaceV2(QWidget):
 
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "Export Visualization",
+            "Export Result Plot",
             str(default),
             "PNG image (*.png);;PDF (*.pdf);;SVG (*.svg)",
         )
@@ -938,7 +938,7 @@ class VisualizationWorkspaceV2(QWidget):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Export Visualization",
+                "Export Result Plot",
                 f"Could not export the active visualization:\n\n{exc}",
             )
 
@@ -959,6 +959,7 @@ def attach_visualization_workspace_v2(window):
         widget = item.widget()
         child_layout = item.layout()
         if widget is not None:
+            widget.hide()
             widget.deleteLater()
         elif child_layout is not None:
             child_layout.deleteLater()
