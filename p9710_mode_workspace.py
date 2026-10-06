@@ -8,7 +8,6 @@ Peak-to-Peak and synchronized I-Effective (Schmidt-Clausen).
 
 from __future__ import annotations
 
-import math
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
@@ -17,7 +16,6 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QMessageBox,
     QProgressBar,
@@ -29,6 +27,8 @@ from PySide6.QtWidgets import (
 )
 
 from p9710 import P9710
+from p9710_range_policy import GP_SATURATION_REFERENCE, normalized_range_use
+from luxmeter_ui import CollapsibleSection, form_section, result_section, two_columns
 
 
 DEFAULT_PORT = "COM7"
@@ -40,8 +40,8 @@ DEFAULT_WINDOW_MS = 600
 DEFAULT_THRESHOLD_LX = 5.0
 DEFAULT_C_S = 0.2
 
-RANGE_UTILIZATION_MIN_PCT = 15.0
-RANGE_UTILIZATION_MAX_PCT = 85.0
+RANGE_UTILIZATION_MIN_PCT = 10.0
+RANGE_UTILIZATION_MAX_PCT = 90.0
 DETECTOR_SENSITIVITY_NA_PER_LX = 0.376
 RANGE_MAX_CURRENT_NA = {
     0: 2_000_000.0,
@@ -96,17 +96,39 @@ def _style_utilization(bar: QProgressBar, value_pct: float | None):
         bar.setFormat("Unavailable")
         color = "#607D8B"
     else:
-        value_pct = max(0.0, min(100.0, float(value_pct)))
-        bar.setValue(int(round(value_pct)))
-        bar.setFormat(f"{value_pct:.1f}%")
-        outside = value_pct < RANGE_UTILIZATION_MIN_PCT or value_pct > RANGE_UTILIZATION_MAX_PCT
-        color = "#D9534F" if outside else "#2EAD67"
+        value_pct = float(value_pct)
+        bar.setValue(int(round(max(0.0, min(100.0, value_pct)))))
+        if value_pct > RANGE_UTILIZATION_MAX_PCT:
+            state, color = "Above limit", "#D9534F"
+        elif value_pct < RANGE_UTILIZATION_MIN_PCT:
+            state, color = "Low utilization", "#D9A441"
+        else:
+            state, color = "Within observed target", "#1769AA"
+        bar.setFormat(f"{value_pct:.1f}% • {state}")
 
     bar.setStyleSheet(
         "QProgressBar { border:1px solid #34495E; border-radius:4px; "
         "background:#14212B; color:#FFFFFF; text-align:center; font-weight:700; }"
         f"QProgressBar::chunk {{ background:{color}; border-radius:3px; }}"
     )
+
+
+def _update_range_use(label, bar, raw_gp, range_id):
+    """Display the empirical guard percentage while retaining the raw reading."""
+    try:
+        percent = None if raw_gp is None else normalized_range_use(raw_gp)
+    except (ValueError, TypeError):
+        percent = None
+    if percent is None:
+        label.setText(f"Range use: unavailable • R{range_id}")
+    else:
+        label.setText(f"Range use: {percent:.1f}% of limit • R{range_id} • raw GP {raw_gp:g}")
+    label.setToolTip(
+        f"Observed saturation reference: raw GP {GP_SATURATION_REFERENCE:g}. "
+        "Range use = 100 × |GP| / reference. Target 10–90%. "
+        "This is the laboratory's empirical guard, not a lux correction."
+    )
+    _style_utilization(bar, percent)
 
 
 class CWWorker(QThread):
@@ -188,7 +210,13 @@ def attach_p9710_mode_workspace(window):
     header.setColumnStretch(2, 0)
     header.setColumnStretch(3, 0)
     header.setColumnStretch(4, 1)
-    root.addLayout(header)
+    connection_box = QGroupBox("Connection")
+    connection_box.setLayout(header)
+    header.setContentsMargins(14, 16, 14, 14)
+    header.setHorizontalSpacing(12)
+    header.setVerticalSpacing(12)
+    connection_status.setWordWrap(True)
+    root.addWidget(connection_box)
 
     stack = QStackedWidget()
     root.addWidget(stack)
@@ -235,10 +263,9 @@ def attach_p9710_mode_workspace(window):
 
     def make_cw_page(mode_name: str, value_field: str, accumulated: bool = False):
         page = QWidget()
-        layout = QGridLayout(page)
+        layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.setHorizontalSpacing(14)
-        layout.setVerticalSpacing(9)
+        layout.setSpacing(12)
 
         integration = QDoubleSpinBox()
         integration.setRange(0.1, 6000.0)
@@ -259,7 +286,7 @@ def attach_p9710_mode_workspace(window):
         range_spin.valueChanged.connect(lambda v: range_hint.setText(_range_interval_text(v)))
 
         read_button = QPushButton(f"Read {mode_name}")
-        read_button.setFixedWidth(180)
+        read_button.setMinimumWidth(180)
         reset_button = QPushButton("Reset extrema") if accumulated else None
         if reset_button is not None:
             reset_button.setFixedWidth(140)
@@ -270,35 +297,25 @@ def attach_p9710_mode_workspace(window):
         peak_max_label = QLabel("Peak max: —")
         peak_min_label = QLabel("Peak min: —")
         p2p_label = QLabel("Peak-to-peak: —")
-        utilization_text = QLabel("Range utilization (GP): —")
+        utilization_text = QLabel("Range use: —")
         utilization_bar = QProgressBar()
         utilization_bar.setMinimumHeight(24)
         _style_utilization(utilization_bar, None)
 
         state = {"extreme": None}
 
-        layout.addWidget(QLabel("Integration time:"), 0, 0)
-        layout.addWidget(integration, 0, 1)
-        layout.addWidget(QLabel("Range:"), 0, 2)
-        layout.addWidget(range_spin, 0, 3)
-        layout.addWidget(sync_box, 0, 4)
-        layout.addWidget(range_hint, 1, 2, 1, 3)
-        layout.addWidget(read_button, 2, 0, 1, 2)
+        settings = form_section("Measurement settings", [
+            ("Integration time:", integration), ("Range:", range_spin),
+            ("", range_hint), ("", sync_box),
+        ])
+        settings.layout().addRow(read_button)
         if reset_button is not None:
-            layout.addWidget(reset_button, 2, 2)
-        layout.addWidget(result, 3, 0, 1, 3)
-        layout.addWidget(cw_label, 4, 0)
-        layout.addWidget(peak_max_label, 4, 1)
-        layout.addWidget(peak_min_label, 4, 2)
-        layout.addWidget(p2p_label, 4, 3)
-        layout.addWidget(utilization_text, 5, 0, 1, 5)
-        layout.addWidget(utilization_bar, 6, 0, 1, 5)
-        layout.setColumnStretch(0, 0)
-        layout.setColumnStretch(1, 0)
-        layout.setColumnStretch(2, 0)
-        layout.setColumnStretch(3, 0)
-        layout.setColumnStretch(4, 1)
-        layout.setRowStretch(7, 1)
+            settings.layout().addRow(reset_button)
+        page.continuous_controls_layout = QVBoxLayout()
+        settings.layout().addRow(page.continuous_controls_layout)
+        results = result_section("Live reading", result, cw_label, peak_max_label,
+                                 peak_min_label, p2p_label, utilization_text, utilization_bar)
+        layout.addWidget(two_columns(settings, results, page))
 
         def finish_worker():
             worker = worker_holder["worker"]
@@ -343,11 +360,8 @@ def attach_p9710_mode_workspace(window):
                 f"{mode_name}: —" if display_value is None else f"{mode_name}: {display_value:.4f} lx"
             )
 
-            gp = reading.range_utilization_pct
-            utilization_text.setText(
-                f"Range utilization (GP): {'—' if gp is None else f'{gp:.1f}%'}  |  {_range_interval_text(reading.range_id)}"
-            )
-            _style_utilization(utilization_bar, gp)
+            _update_range_use(utilization_text, utilization_bar,
+                              reading.range_utilization_pct, reading.range_id)
 
             window.p9710_last_cw_reading = reading
 
@@ -393,10 +407,9 @@ def attach_p9710_mode_workspace(window):
 
     # I-Effective (Schmidt-Clausen) page.
     effective_page = QWidget()
-    egrid = QGridLayout(effective_page)
+    egrid = QVBoxLayout(effective_page)
     egrid.setContentsMargins(8, 8, 8, 8)
-    egrid.setHorizontalSpacing(14)
-    egrid.setVerticalSpacing(9)
+    egrid.setSpacing(12)
 
     period_spin = QDoubleSpinBox()
     period_spin.setRange(0.05, 120.0)
@@ -447,43 +460,31 @@ def attach_p9710_mode_workspace(window):
     distance_spin.setFixedWidth(120)
 
     e_button = QPushButton("Measure synchronized")
-    e_button.setFixedWidth(190)
+    e_button.setMinimumWidth(190)
     e_result = QLabel("E-effective: —")
     i_result = QLabel("I-effective: —")
     trigger_result = QLabel("Trigger sample: —")
     e_status = QLabel("Ready")
-    e_gp_text = QLabel("Range utilization (GP): —")
+    e_gp_text = QLabel("Range use: —")
     e_gp_bar = QProgressBar()
     e_gp_bar.setMinimumHeight(24)
     _style_utilization(e_gp_bar, None)
 
-    egrid.addWidget(QLabel("Pulse period:"), 0, 0)
-    egrid.addWidget(period_spin, 0, 1)
-    egrid.addWidget(QLabel("Pre-trigger:"), 0, 2)
-    egrid.addWidget(pre_spin, 0, 3)
-    egrid.addWidget(QLabel("MI window:"), 1, 0)
-    egrid.addWidget(window_spin, 1, 1)
-    egrid.addWidget(QLabel("Range:"), 1, 2)
-    egrid.addWidget(range_spin, 1, 3)
-    egrid.addWidget(range_hint, 2, 2, 1, 2)
-    egrid.addWidget(QLabel("Trigger threshold:"), 3, 0)
-    egrid.addWidget(threshold_spin, 3, 1)
-    egrid.addWidget(QLabel("Schmidt-Clausen C:"), 3, 2)
-    egrid.addWidget(c_spin, 3, 3)
-    egrid.addWidget(QLabel("Distance:"), 4, 0)
-    egrid.addWidget(distance_spin, 4, 1)
-    egrid.addWidget(e_button, 5, 0, 1, 2)
-    egrid.addWidget(e_status, 5, 2, 1, 2)
-    egrid.addWidget(e_result, 6, 0)
-    egrid.addWidget(i_result, 6, 1)
-    egrid.addWidget(trigger_result, 6, 2, 1, 2)
-    egrid.addWidget(e_gp_text, 7, 0, 1, 4)
-    egrid.addWidget(e_gp_bar, 8, 0, 1, 4)
-    egrid.setColumnStretch(0, 0)
-    egrid.setColumnStretch(1, 0)
-    egrid.setColumnStretch(2, 0)
-    egrid.setColumnStretch(3, 1)
-    egrid.setRowStretch(9, 1)
+    e_result.setStyleSheet("font-size:18pt; font-weight:700; color:#55EFC4;")
+    i_result.setStyleSheet("font-size:18pt; font-weight:700; color:#E7F2F8;")
+    settings = form_section("Flash measurement settings", [
+        ("Pulse period:", period_spin), ("Range:", range_spin),
+        ("", range_hint), ("Distance:", distance_spin),
+    ])
+    advanced = form_section("Acquisition parameters", [
+        ("Pre-trigger:", pre_spin), ("MI window:", window_spin),
+        ("Trigger threshold:", threshold_spin), ("Schmidt-Clausen C:", c_spin),
+    ])
+    settings.layout().addRow(CollapsibleSection("Advanced settings", advanced))
+    settings.layout().addRow(e_button)
+    results = result_section("Effective measurement", e_result, i_result, trigger_result,
+                             e_status, e_gp_text, e_gp_bar)
+    egrid.addWidget(two_columns(settings, results, effective_page))
 
     def effective_finished():
         worker = worker_holder["worker"]
@@ -505,11 +506,8 @@ def attach_p9710_mode_workspace(window):
         trigger_result.setText(f"Trigger sample: {reading.trigger_sample_lx:.3f} lx")
         e_status.setText(f"Complete — start error {reading.software_start_error_ms:+.2f} ms")
         e_status.setStyleSheet("color:#55EFC4;")
-        gp = reading.range_utilization_pct
-        e_gp_text.setText(
-            f"Range utilization (GP): {'—' if gp is None else f'{gp:.1f}%'}  |  {_range_interval_text(reading.range_id)}"
-        )
-        _style_utilization(e_gp_bar, gp)
+        _update_range_use(e_gp_text, e_gp_bar,
+                          reading.range_utilization_pct, reading.range_id)
         window.p9710_last_e_effective_lx = reading.e_effective_lx
         window.p9710_last_i_effective_cd = i_effective
         window.p9710_last_reading = reading
@@ -551,7 +549,7 @@ def attach_p9710_mode_workspace(window):
     )
     note.setWordWrap(True)
     note.setStyleSheet("color:#7892A3;")
-    root.addWidget(note)
+    root.addWidget(CollapsibleSection("About measurement modes", note))
 
     insert_index = parent_layout.indexOf(getattr(window, "luxmeter_effective_box", lux_box))
     parent_layout.insertWidget(insert_index + 1 if insert_index >= 0 else parent_layout.count(), box)

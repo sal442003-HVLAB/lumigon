@@ -140,10 +140,14 @@ def attach_p9710_continuous_runtime(window):
         row.addWidget(status)
         row.addStretch(1)
 
-        try:
-            next_row = max(0, layout.rowCount() - 1)
-            layout.addWidget(continuous_row, next_row, 0, 1, 5)
-        except AttributeError:
+        controls_layout = getattr(page, "continuous_controls_layout", None)
+        if controls_layout is not None:
+            row.setSpacing(8)
+            # Stack the monitoring controls within the settings column.
+            row.removeWidget(status)
+            controls_layout.addWidget(continuous_row)
+            controls_layout.addWidget(status)
+        else:
             layout.addWidget(continuous_row)
 
         timer = QTimer(page)

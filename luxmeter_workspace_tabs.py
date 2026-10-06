@@ -1,15 +1,13 @@
 """Compact nested workspace for Luxmeter instruments.
 
 The top-level Luxmeter tab should stay simple. This module groups the existing
-Czibula/Grundmann controls, the P-9710 synchronized measurement panel, and a
-small validation area into dedicated sub-tabs without changing acquisition
-logic.
+Czibula/Grundmann controls and the P-9710 measurement panel into dedicated
+sub-tabs without changing acquisition logic.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
 
 def _clear_layout(layout):
@@ -40,7 +38,7 @@ def _make_page(*widgets):
 
 
 def attach_luxmeter_workspace_tabs(window):
-    """Replace the crowded Luxmeter page with three focused sub-tabs."""
+    """Replace the crowded Luxmeter page with two instrument sub-tabs."""
 
     if getattr(window, "luxmeter_subtabs", None) is not None:
         return window.luxmeter_subtabs
@@ -50,7 +48,6 @@ def attach_luxmeter_workspace_tabs(window):
         raise RuntimeError("Luxmeter top-level tab is not available.")
 
     cg_box = getattr(window, "luxmeter_box", None)
-    cg_effective_box = getattr(window, "luxmeter_effective_box", None)
     p9710_box = getattr(window, "p9710_effective_box", None)
 
     if cg_box is None:
@@ -68,40 +65,17 @@ def attach_luxmeter_workspace_tabs(window):
     subtabs.tabBar().setExpanding(False)
     subtabs.tabBar().setDrawBase(False)
 
-    cg_page = _make_page(cg_box, cg_effective_box)
+    cg_page = _make_page(cg_box)
     p9710_page = _make_page(p9710_box)
-
-    validation_page = QWidget()
-    validation_layout = QVBoxLayout(validation_page)
-    validation_layout.setContentsMargins(18, 18, 18, 18)
-    validation_layout.setSpacing(10)
-
-    title = QLabel("Validation / Comparison")
-    title.setObjectName("luxmeterValidationTitle")
-
-    body = QLabel(
-        "Reserved for side-by-side cross-checks between the C&G Ph-Amp MB7 and "
-        "Gigahertz-Optik P-9710. Formal comparison tools can be added here later "
-        "without crowding either instrument workspace."
-    )
-    body.setWordWrap(True)
-    body.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-    body.setObjectName("luxmeterValidationText")
-
-    validation_layout.addWidget(title)
-    validation_layout.addWidget(body)
-    validation_layout.addStretch(1)
 
     subtabs.addTab(cg_page, "C&G Ph-Amp MB7")
     subtabs.addTab(p9710_page, "Gigahertz-Optik P-9710")
-    subtabs.addTab(validation_page, "Validation")
 
     root.addWidget(subtabs, 1)
 
     window.luxmeter_subtabs = subtabs
     window.luxmeter_cg_tab = cg_page
     window.luxmeter_p9710_tab = p9710_page
-    window.luxmeter_validation_tab = validation_page
 
     # Make the second-level tabs visibly subordinate to the main application tabs.
     host.setStyleSheet(
@@ -111,6 +85,19 @@ def attach_luxmeter_workspace_tabs(window):
             border: 1px solid #2B4050;
             background-color: #101820;
             top: 0px;
+        }
+
+        QTabWidget#luxmeterSubTabs > QTabBar {
+            border-bottom: 1px solid #2B4050;
+        }
+
+        QLineEdit, QComboBox, QAbstractSpinBox {
+            background-color: #20282E;
+            color: #E7F2F8;
+            border: 1px solid #34495E;
+            border-radius: 4px;
+            padding: 5px 7px;
+            min-height: 20px;
         }
 
         QTabWidget#luxmeterSubTabs > QTabBar::tab {
@@ -127,19 +114,6 @@ def attach_luxmeter_workspace_tabs(window):
             border-color: #2D7FB9;
         }
 
-        QLabel#luxmeterValidationTitle {
-            color: #4DA3FF;
-            font-size: 15pt;
-            font-weight: 700;
-        }
-
-        QLabel#luxmeterValidationText {
-            color: #9DB1BE;
-            background-color: #17232D;
-            border: 1px solid #2B4050;
-            border-radius: 6px;
-            padding: 14px;
-        }
         """
     )
 

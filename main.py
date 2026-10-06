@@ -15,7 +15,6 @@ from axis_profile_controls import attach_axis_profile_controls
 from motor_control_refinement import attach_motor_control_refinement
 from manual_motion_async import attach_async_manual_motion
 from luxmeter_controls import attach_luxmeter_controls
-from effective_intensity_test import attach_effective_intensity_test
 from p9710_mode_workspace import attach_p9710_mode_workspace
 from p9710_continuous_runtime import attach_p9710_continuous_runtime
 from p9710_flash_timing_runtime import attach_p9710_flash_timing_runtime
@@ -179,12 +178,11 @@ def main():
 
     organize_main_window_tabs(window)
     attach_visualization_workspace_v2(window)
-    attach_effective_intensity_test(window)
     attach_p9710_mode_workspace(window)
     attach_p9710_continuous_runtime(window)
     attach_luxmeter_workspace_tabs(window)
-    attach_luxmeter_scroll_runtime(window)
     attach_p9710_flash_timing_runtime(window)
+    attach_luxmeter_scroll_runtime(window)
     attach_measurement_runtime_v2(window)
 
     _apply_confirmed_axis_limits(window)

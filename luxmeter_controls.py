@@ -5,6 +5,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QGridLayout,
+    QHBoxLayout,
+    QVBoxLayout,
     QGroupBox,
     QLabel,
     QMessageBox,
@@ -92,7 +94,6 @@ def attach_luxmeter_controls(window):
     insert_index = max(0, parent_layout.count() - 2)
 
     box = QGroupBox(f"Luxmeter — {LUXMETER_CG}")
-    layout = QGridLayout()
 
     instrument_combo = QComboBox()
     instrument_combo.addItems([
@@ -151,36 +152,37 @@ def attach_luxmeter_controls(window):
     lux_label = QLabel("Lux: —")
     stability_label = QLabel("Std. dev.: —")
 
-    layout.addWidget(QLabel("Instrument:"), 0, 0)
-    layout.addWidget(instrument_combo, 0, 1, 1, 3)
-    layout.addWidget(status_label, 0, 5)
-
-    layout.addWidget(QLabel("Port:"), 1, 0)
-    layout.addWidget(port_combo, 1, 1)
-    layout.addWidget(refresh_ports_button, 1, 2)
-    layout.addWidget(connect_button, 1, 3)
-    layout.addWidget(disconnect_button, 1, 4)
-
-    layout.addWidget(QLabel("Sensitivity:"), 2, 0)
-    layout.addWidget(sensitivity_spin, 2, 1)
-    layout.addWidget(QLabel("Samples:"), 2, 2)
-    layout.addWidget(samples_spin, 2, 3)
-    layout.addWidget(QLabel("Integration:"), 2, 4)
-    layout.addWidget(integration_spin, 2, 5)
-
-    layout.addWidget(read_button, 3, 0)
-    layout.addWidget(start_live_button, 3, 1)
-    layout.addWidget(stop_live_button, 3, 2)
-    layout.addWidget(QLabel("Poll interval:"), 3, 3)
-    layout.addWidget(live_interval_spin, 3, 4)
-    layout.addWidget(live_status_label, 3, 5)
-
-    layout.addWidget(current_label, 4, 0, 1, 2)
-    layout.addWidget(lux_label, 4, 2)
-    layout.addWidget(stability_label, 4, 3)
-    layout.addWidget(id_label, 4, 4, 1, 2)
-
-    box.setLayout(layout)
+    from luxmeter_ui import form_section, result_section, two_columns
+    root = QVBoxLayout(box)
+    root.setContentsMargins(10, 10, 10, 10)
+    root.setSpacing(16)
+    connection = QGroupBox("Connection")
+    connection_grid = QGridLayout(connection)
+    connection_grid.setContentsMargins(14, 16, 14, 14)
+    connection_grid.setSpacing(12)
+    connection_grid.addWidget(QLabel("Instrument:"), 0, 0)
+    connection_grid.addWidget(instrument_combo, 0, 1, 1, 3)
+    connection_grid.addWidget(status_label, 0, 4)
+    connection_grid.addWidget(QLabel("Port:"), 1, 0)
+    connection_grid.addWidget(port_combo, 1, 1)
+    connection_grid.addWidget(refresh_ports_button, 1, 2)
+    connection_grid.addWidget(connect_button, 1, 3)
+    connection_grid.addWidget(disconnect_button, 1, 4)
+    connection_grid.setColumnStretch(1, 1)
+    root.addWidget(connection)
+    settings = form_section("Measurement settings", [
+        ("Sensitivity:", sensitivity_spin), ("Samples:", samples_spin),
+        ("Integration:", integration_spin), ("Poll interval:", live_interval_spin),
+    ])
+    settings.layout().addRow(read_button)
+    live_row = QHBoxLayout()
+    live_row.addWidget(start_live_button)
+    live_row.addWidget(stop_live_button)
+    settings.layout().addRow(live_row)
+    lux_label.setStyleSheet("font-size:22pt; font-weight:700; color:#55EFC4;")
+    results = result_section("Illuminance", lux_label, current_label, stability_label,
+                             live_status_label, id_label)
+    root.addWidget(two_columns(settings, results))
 
     def _repolish(label):
         label.style().unpolish(label)

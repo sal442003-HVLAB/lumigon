@@ -14,6 +14,8 @@ electrical pulse-width measurement.
 
 from __future__ import annotations
 
+from luxmeter_ui import CollapsibleSection, form_section, result_section, two_columns
+
 import math
 import statistics
 import time
@@ -22,7 +24,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
-    QGridLayout,
+    QVBoxLayout,
     QGroupBox,
     QLabel,
     QMessageBox,
@@ -229,14 +231,9 @@ def attach_p9710_flash_timing_runtime(window):
         raise RuntimeError("P-9710 workspace parent layout is not available.")
 
     box = QGroupBox("Flash Timing Diagnostic")
-    grid = QGridLayout(box)
+    grid = QVBoxLayout(box)
     grid.setContentsMargins(12, 10, 12, 10)
-    grid.setHorizontalSpacing(10)
-    grid.setVerticalSpacing(6)
-    grid.setColumnStretch(0, 0)
-    grid.setColumnStretch(1, 0)
-    grid.setColumnStretch(2, 0)
-    grid.setColumnStretch(3, 1)
+    grid.setSpacing(12)
 
     range_spin = QSpinBox()
     range_spin.setRange(0, 7)
@@ -277,20 +274,15 @@ def attach_p9710_flash_timing_runtime(window):
     note.setWordWrap(True)
     note.setStyleSheet("color:#7892A3;")
 
-    grid.addWidget(QLabel("Fixed range:"), 0, 0)
-    grid.addWidget(range_spin, 0, 1)
-    grid.addWidget(QLabel("Capture time:"), 0, 2)
-    grid.addWidget(capture_spin, 0, 3)
-
-    grid.addWidget(measure_button, 1, 0, 1, 2)
-    grid.addWidget(status, 1, 2, 1, 2)
-
-    grid.addWidget(period_label, 2, 0, 1, 1)
-    grid.addWidget(duration_label, 2, 1, 1, 1)
-    grid.addWidget(duty_label, 2, 2, 1, 1)
-    grid.addWidget(detail_label, 2, 3, 1, 1)
-
-    grid.addWidget(note, 3, 0, 1, 4)
+    settings = form_section("Timing capture", [
+        ("Fixed range:", range_spin), ("Capture time:", capture_spin),
+    ])
+    settings.layout().addRow(measure_button)
+    status.setWordWrap(True)
+    settings.layout().addRow(status)
+    results = result_section("Timing results", period_label, duration_label, duty_label, detail_label)
+    grid.addWidget(two_columns(settings, results))
+    grid.addWidget(CollapsibleSection("About optical timing", note))
 
     worker_holder = {"worker": None}
 
@@ -376,7 +368,9 @@ def attach_p9710_flash_timing_runtime(window):
     measure_button.clicked.connect(start_measurement)
 
     insert_index = layout.indexOf(p9710_box)
-    layout.insertWidget(insert_index + 1 if insert_index >= 0 else layout.count(), box)
+    section = CollapsibleSection("Flash timing diagnostic", box)
+    layout.insertWidget(insert_index + 1 if insert_index >= 0 else layout.count(), section)
+    window.p9710_flash_timing_section = section
 
     window.p9710_flash_timing_box = box
     window.p9710_flash_timing_worker = None
