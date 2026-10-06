@@ -94,7 +94,7 @@ def _load_p9710_miol_csv(path: Path, rows: list[dict]) -> MeasurementRun:
 
         points.append(
             MeasurementPoint(
-                point=_int(row.get("point")),
+                point=point_id,
                 c_deg=_float(row.get("C_deg")),
                 gamma_deg=_float(row.get("Gamma_deg")),
                 current_na=None,
@@ -186,6 +186,7 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
     sample_count = _int(first.get("sample_count"), 1)
     started_at = _datetime(first.get("run_started_at"))
     coordinates = set()
+    point_ids = set()
     points = []
 
     for row_number, row in enumerate(rows, start=2):
@@ -193,6 +194,7 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
         row_schema = str(row.get("schema_version", "")).strip()
         row_mode = str(row.get("mode", "")).strip()
         row_distance = _float(row.get("distance_m"))
+        row_sample_id = str(row.get("sample_id", sample_id)).strip() or "Unspecified"
 
         if row_format != format_name or row_schema != schema_version:
             raise ValueError(
@@ -201,6 +203,14 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
         if row_mode != mode:
             raise ValueError(
                 f"Row {row_number}: mixed measurement modes are not allowed."
+            )
+        if row_sample_id != sample_id:
+            raise ValueError(
+                f"Row {row_number}: mixed sample IDs are not allowed."
+            )
+        if not math.isfinite(row_distance):
+            raise ValueError(
+                f"Row {row_number}: measurement distance must be finite."
             )
         if abs(row_distance - distance_m) > max(1e-9, abs(distance_m) * 1e-9):
             raise ValueError(
@@ -213,6 +223,13 @@ def _load_v2_measurement_csv(path: Path, rows: list[dict]) -> MeasurementRun:
             raise ValueError(
                 f"Row {row_number}: C/Gamma coordinates must be finite numbers."
             )
+        point_id = _int(row.get("point"))
+        if point_id in point_ids:
+            raise ValueError(
+                f"Row {row_number}: duplicate point number {point_id}."
+            )
+        point_ids.add(point_id)
+
         coordinate = (round(c_deg, 9), round(gamma_deg, 9))
         if coordinate in coordinates:
             raise ValueError(
