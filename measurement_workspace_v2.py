@@ -27,8 +27,8 @@ from PySide6.QtWidgets import (
 
 
 DEFAULT_DISTANCE_M = 5.00
-DEFAULT_C_START_DEG = -80.0
-DEFAULT_C_END_DEG = 80.0
+DEFAULT_C_START_DEG = -70.0
+DEFAULT_C_END_DEG = 70.0
 DEFAULT_C_STEP_DEG = 10.0
 DEFAULT_GAMMA_START_DEG = -5.0
 DEFAULT_GAMMA_END_DEG = 5.0
@@ -242,7 +242,7 @@ def build_measurement_workspace_v2(window):
     start_button.setFixedWidth(190)
     start_button.setEnabled(False)
     start_button.setToolTip(
-        "Automatic V2 C/Gamma execution is intentionally not connected yet."
+        "Start the automatic V2 C/Gamma measurement run."
     )
     footer.addWidget(start_button, 0, Qt.AlignRight)
     left.addLayout(footer)
