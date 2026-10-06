@@ -2,9 +2,9 @@
 
 The V2 runtime intentionally owns one simple workflow:
 - move through the requested C x Gamma grid,
-- acquire three independent optical flashes at every point with the P-9710,
-- validate the three values against a relative tolerance,
-- store one accepted value for the point,
+- acquire one valid optical flash at every point with the P-9710,
+- automatically retry incomplete/invalid acquisitions,
+- store the accepted value for the point,
 - save every accepted point immediately to CSV.
 
 For E-effective mode the Schmidt-Clausen form-factor equation is calculated
@@ -26,10 +26,7 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from machine_config import C_LIMIT_DEG, GAMMA_LIMIT_DEG
-from measurement_point_validation_v2 import (
-    DEFAULT_TOLERANCE_PCT,
-    validate_triplicate,
-)
+from measurement_progress_dialog_v2 import MeasurementProgressDialogV2
 from measurement_run import measurement_data_directory
 from motion_controller import C_AXIS, GAMMA
 from p9710 import P9710Error
@@ -265,6 +262,7 @@ def _format_point_value(mode: str, value_lx: float, distance_m: float) -> str:
 
 class MeasurementV2Worker(QThread):
     status = Signal(str)
+    progress = Signal(object)
     point_accepted = Signal(object)
     completed = Signal(object)
     aborted = Signal(str)
@@ -379,60 +377,101 @@ class MeasurementV2Worker(QThread):
 
         raise RuntimeError(last_error or "Could not acquire a valid optical flash.")
 
-    def _measure_point(self, sequence: int, total: int, c_deg: float, gamma_deg: float):
+    def _measure_point(
+        self,
+        sequence: int,
+        total: int,
+        c_deg: float,
+        gamma_deg: float,
+    ):
+        last_error = None
+
         for attempt in range(1, MAX_POINT_ATTEMPTS + 1):
-            values = []
-            flashes = []
+            self._check_abort()
 
             if attempt > 1:
                 self.status.emit(
-                    f"Point {sequence}/{total} • C {c_deg:+.1f}° • Gamma {gamma_deg:+.1f}° "
-                    f"— repeat set {attempt}/{MAX_POINT_ATTEMPTS}"
+                    f"Point {sequence}/{total} • C {c_deg:+.1f}° • "
+                    f"Gamma {gamma_deg:+.1f}° — retry {attempt}/{MAX_POINT_ATTEMPTS}"
                 )
 
-            for sample_number in range(1, 4):
-                self._check_abort()
+            try:
                 self.status.emit(
-                    f"Point {sequence}/{total} • C {c_deg:+.1f}° • Gamma {gamma_deg:+.1f}° "
-                    f"— measuring sample {sample_number}/3"
+                    f"Point {sequence}/{total} • C {c_deg:+.1f}° • "
+                    f"Gamma {gamma_deg:+.1f}° — measuring"
                 )
 
                 flash = self._capture_one_flash()
-                flashes.append(flash)
-
                 value = (
                     flash.cw_max_lx
                     if self.mode == MODE_CW_MAXIMUM
                     else flash.e_effective_lx
                 )
-                values.append(value)
 
                 self.status.emit(
-                    f"Point {sequence}/{total} • sample {sample_number}/3 read — "
+                    f"Point {sequence}/{total} acquired — "
                     f"{_format_point_value(self.mode, value, self.distance_m)}"
                 )
+                return float(value), flash, attempt
 
-            validation = validate_triplicate(
-                values,
-                tolerance_pct=DEFAULT_TOLERANCE_PCT,
+            except _AbortRequested:
+                raise
+            except Exception as exc:
+                last_error = str(exc)
+                if attempt < MAX_POINT_ATTEMPTS:
+                    self.status.emit(
+                        f"Point {sequence}/{total} acquisition invalid — "
+                        f"retrying same point"
+                    )
+                else:
+                    raise RuntimeError(
+                        f"C {c_deg:+.1f}°, Gamma {gamma_deg:+.1f}° could not "
+                        f"produce a valid flash after {MAX_POINT_ATTEMPTS} attempts. "
+                        f"Last error: {last_error}"
+                    ) from exc
+
+        raise RuntimeError(last_error or "Point acquisition failed.")
+
+    def _estimated_move_seconds(self, axis, delta_degree: float) -> float:
+        delta_degree = abs(float(delta_degree))
+        if delta_degree <= 0.01:
+            return 0.0
+
+        try:
+            motor_rpm = self.motion.expected_speed_raw(axis) / 10.0
+        except Exception:
+            motor_rpm = 0.0
+
+        if motor_rpm <= 0.0:
+            return max(0.5, delta_degree)
+
+        output_deg_per_second = motor_rpm * 6.0 / axis.gear_ratio
+        if output_deg_per_second <= 0.0:
+            return max(0.5, delta_degree)
+
+        # Small allowance for acceleration/deceleration and command overhead.
+        return delta_degree / output_deg_per_second + 0.6
+
+    def _predicted_plan(self, start_c: float, start_gamma: float):
+        point_estimates = []
+        previous_c = float(start_c)
+        previous_gamma = float(start_gamma)
+
+        for c_deg, gamma_deg in self.points:
+            duration = (
+                self._estimated_move_seconds(C_AXIS, c_deg - previous_c)
+                + self._estimated_move_seconds(GAMMA, gamma_deg - previous_gamma)
+                + SETTLE_S
+                + FLASH_CAPTURE_S
+                + 0.15
             )
+            point_estimates.append(duration)
+            previous_c = c_deg
+            previous_gamma = gamma_deg
 
-            if validation.valid:
-                return validation, flashes, attempt
-
-            if attempt < MAX_POINT_ATTEMPTS:
-                self.status.emit(
-                    f"Point {sequence}/{total} rejected — max deviation "
-                    f"{validation.max_deviation_pct:.2f}% > "
-                    f"{validation.tolerance_pct:.1f}% • repeating same point"
-                )
-            else:
-                raise RuntimeError(
-                    f"C {c_deg:+.1f}°, Gamma {gamma_deg:+.1f}° failed "
-                    f"triplicate validation after {MAX_POINT_ATTEMPTS} sets. "
-                    f"Last maximum deviation was "
-                    f"{validation.max_deviation_pct:.2f}%."
-                )
+        gamma_return_s = self._estimated_move_seconds(GAMMA, -previous_gamma)
+        c_return_s = self._estimated_move_seconds(C_AXIS, -previous_c)
+        return point_estimates, gamma_return_s, c_return_s
 
     def run(self):
         started = datetime.now().astimezone()
@@ -454,6 +493,7 @@ class MeasurementV2Worker(QThread):
                 "lumigon_format",
                 "schema_version",
                 "sample_id",
+                "sample_count",
                 "run_started_at",
                 "point",
                 "c_deg",
@@ -473,6 +513,8 @@ class MeasurementV2Worker(QThread):
                 "mean_net_peak_lx",
                 "mean_pulse_duration_ms",
                 "mean_sample_interval_ms",
+                "integral_lx_s",
+                "acquisition_attempt",
                 "validation_attempt",
             ]
 
@@ -482,6 +524,27 @@ class MeasurementV2Worker(QThread):
                 stream.flush()
 
                 total = len(self.points)
+                start_c = self.motion.get_current_angle(C_AXIS)
+                start_gamma = self.motion.get_current_angle(GAMMA)
+                point_estimates, gamma_return_s, c_return_s = self._predicted_plan(
+                    start_c,
+                    start_gamma,
+                )
+                predicted_total_s = (
+                    sum(point_estimates) + gamma_return_s + c_return_s
+                )
+                run_clock = time.monotonic()
+                predicted_completed_s = 0.0
+                timing_scale = 1.0
+
+                self.progress.emit(
+                    {
+                        "completed": 0,
+                        "total": total,
+                        "percent": 0,
+                        "remaining_s": predicted_total_s,
+                    }
+                )
 
                 for sequence, (c_deg, gamma_deg) in enumerate(self.points, start=1):
                     self._check_abort()
@@ -505,7 +568,7 @@ class MeasurementV2Worker(QThread):
 
                     self._wait_interruptible(SETTLE_S)
 
-                    validation, flashes, validation_attempt = self._measure_point(
+                    value, flash, acquisition_attempt = self._measure_point(
                         sequence,
                         total,
                         c_deg,
@@ -513,49 +576,45 @@ class MeasurementV2Worker(QThread):
                     )
 
                     accepted_e_lx = (
-                        validation.mean if self.mode == MODE_I_EFFECTIVE else None
+                        value if self.mode == MODE_I_EFFECTIVE else None
                     )
                     accepted_i_cd = (
-                        validation.mean * self.distance_m * self.distance_m
+                        value * self.distance_m * self.distance_m
                         if accepted_e_lx is not None
                         else None
                     )
                     accepted_cw_lx = (
-                        validation.mean if self.mode == MODE_CW_MAXIMUM else None
+                        value if self.mode == MODE_CW_MAXIMUM else None
                     )
 
                     result = {
                         "lumigon_format": "Lumigon Measurement V2",
-                        "schema_version": "2.0",
+                        "schema_version": "2.1",
                         "sample_id": self.sample_id,
+                        "sample_count": 1,
                         "run_started_at": started.isoformat(),
                         "point": sequence,
                         "c_deg": c_deg,
                         "gamma_deg": gamma_deg,
                         "mode": self.mode,
                         "distance_m": self.distance_m,
-                        "sample_1": validation.values[0],
-                        "sample_2": validation.values[1],
-                        "sample_3": validation.values[2],
+                        "sample_1": value,
+                        "sample_2": "",
+                        "sample_3": "",
                         "accepted_e_effective_lx": accepted_e_lx,
                         "accepted_i_effective_cd": accepted_i_cd,
                         "accepted_cw_maximum_lx": accepted_cw_lx,
-                        "max_deviation_pct": validation.max_deviation_pct,
-                        "tolerance_pct": validation.tolerance_pct,
-                        "range_ids": "/".join(str(item.range_id) for item in flashes),
-                        "mean_baseline_lx": statistics.mean(
-                            item.baseline_lx for item in flashes
-                        ),
-                        "mean_net_peak_lx": statistics.mean(
-                            item.net_peak_lx for item in flashes
-                        ),
-                        "mean_pulse_duration_ms": statistics.mean(
-                            item.pulse_duration_ms for item in flashes
-                        ),
-                        "mean_sample_interval_ms": statistics.mean(
-                            item.median_dt_ms for item in flashes
-                        ),
-                        "validation_attempt": validation_attempt,
+                        "max_deviation_pct": "",
+                        "tolerance_pct": "",
+                        "range_ids": str(flash.range_id),
+                        "mean_baseline_lx": flash.baseline_lx,
+                        "mean_net_peak_lx": flash.net_peak_lx,
+                        "mean_pulse_duration_ms": flash.pulse_duration_ms,
+                        "mean_sample_interval_ms": flash.median_dt_ms,
+                        "integral_lx_s": flash.integral_lx_s,
+                        "acquisition_attempt": acquisition_attempt,
+                        # Retained for backward-compatible V2 CSV parsing.
+                        "validation_attempt": acquisition_attempt,
                     }
 
                     writer.writerow(result)
@@ -572,16 +631,53 @@ class MeasurementV2Worker(QThread):
                         accepted_text = f"CW maximum {accepted_cw_lx:.4f} lx"
 
                     self.status.emit(
-                        f"Point {sequence}/{total} accepted — {accepted_text} "
-                        f"• deviation {validation.max_deviation_pct:.2f}%"
+                        f"Point {sequence}/{total} accepted — {accepted_text}"
+                    )
+
+                    predicted_completed_s += point_estimates[sequence - 1]
+                    elapsed_s = max(0.0, time.monotonic() - run_clock)
+                    if predicted_completed_s > 0.0:
+                        timing_scale = max(
+                            0.25,
+                            min(4.0, elapsed_s / predicted_completed_s),
+                        )
+                    remaining_predicted_s = (
+                        sum(point_estimates[sequence:])
+                        + gamma_return_s
+                        + c_return_s
+                    )
+                    self.progress.emit(
+                        {
+                            "completed": sequence,
+                            "total": total,
+                            "percent": 95.0 * sequence / total,
+                            "remaining_s": remaining_predicted_s * timing_scale,
+                        }
                     )
 
                 self._check_abort()
                 self.status.emit("Measurement complete — returning Gamma to 0°")
                 self.motion.move_absolute(GAMMA, 0.0)
+                self.progress.emit(
+                    {
+                        "completed": total,
+                        "total": total,
+                        "percent": 97,
+                        "remaining_s": c_return_s * timing_scale,
+                    }
+                )
+
                 self._check_abort()
                 self.status.emit("Returning C to 0°")
                 self.motion.move_absolute(C_AXIS, 0.0)
+                self.progress.emit(
+                    {
+                        "completed": total,
+                        "total": total,
+                        "percent": 100,
+                        "remaining_s": 0.0,
+                    }
+                )
 
             self.completed.emit(
                 {
@@ -828,7 +924,8 @@ def attach_measurement_runtime_v2(window):
             f"Mode: {window.measurement_v2_mode_combo.currentText()}\n"
             f"Distance: {distance_m:.2f} m\n"
             f"File: {output_path}\n\n"
-            "Each point uses three independently captured flashes. "
+            "Each point uses one valid captured flash. Invalid or incomplete "
+            "acquisitions are retried automatically. "
             "Keep the physical E-STOP accessible.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
