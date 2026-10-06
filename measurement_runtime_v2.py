@@ -434,6 +434,25 @@ class MeasurementV2Worker(QThread):
 
         raise RuntimeError(last_error or "Point acquisition failed.")
 
+    def _return_axes_to_zero_after_abort(self):
+        """Best-effort controlled return to Session Zero after an operator abort."""
+
+        errors = []
+
+        try:
+            self.status.emit("Abort requested — returning Gamma to 0°")
+            self.motion.move_absolute(GAMMA, 0.0)
+        except Exception as exc:
+            errors.append(f"Gamma: {exc}")
+
+        try:
+            self.status.emit("Abort requested — returning C to 0°")
+            self.motion.move_absolute(C_AXIS, 0.0)
+        except Exception as exc:
+            errors.append(f"C: {exc}")
+
+        return errors
+
     def _estimated_move_seconds(self, axis, delta_degree: float) -> float:
         delta_degree = abs(float(delta_degree))
         if delta_degree <= 0.01:
@@ -692,10 +711,20 @@ class MeasurementV2Worker(QThread):
             )
 
         except _AbortRequested:
-            self.aborted.emit(
-                "Measurement aborted at a safe checkpoint. "
-                + (f"Partial CSV: {csv_path}" if csv_path else "")
-            )
+            return_errors = self._return_axes_to_zero_after_abort()
+            partial_text = f" Partial CSV: {csv_path}" if csv_path else ""
+
+            if return_errors:
+                self.aborted.emit(
+                    "Measurement aborted, but return-to-zero was incomplete: "
+                    + " | ".join(return_errors)
+                    + partial_text
+                )
+            else:
+                self.aborted.emit(
+                    "Measurement aborted — Gamma and C returned to 0°."
+                    + partial_text
+                )
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -822,7 +851,7 @@ def attach_measurement_runtime_v2(window):
         running.requestInterruption()
         start_button.setEnabled(False)
         status_label.setText(
-            "Abort requested — finishing the current safe operation…"
+            "Abort requested — completing the current safe operation, then returning both axes to 0°…"
         )
 
     def on_completed(payload):
