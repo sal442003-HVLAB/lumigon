@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 
 from main_window import MainWindow
 from axis_profile_controls import attach_axis_profile_controls
+from motion_limit_controls import apply_axis_limits_to_controls
 from motor_control_refinement import attach_motor_control_refinement
 from manual_motion_async import attach_async_manual_motion
 from luxmeter_controls import attach_luxmeter_controls
@@ -27,8 +28,6 @@ from luxmeter_scroll_runtime import attach_luxmeter_scroll_runtime
 from luxmeter_resilience import install_phamp_connect_retry
 
 from machine_config import (
-    GAMMA_LIMIT_DEG,
-    C_LIMIT_DEG,
     APP_NAME,
     APP_VERSION,
 )
@@ -117,43 +116,6 @@ def _show_startup_popup(popup_path):
     dialog.exec()
 
 
-def _apply_confirmed_axis_limits(window):
-    """Apply the confirmed independent motion ranges to visible HMI controls."""
-
-    gamma_panel = getattr(window, "gamma_panel", None)
-    if gamma_panel is not None:
-        gamma_panel.target_spin.setRange(-GAMMA_LIMIT_DEG, GAMMA_LIMIT_DEG)
-
-    c_panel = getattr(window, "c_panel", None)
-    if c_panel is not None:
-        c_panel.target_spin.setRange(-C_LIMIT_DEG, C_LIMIT_DEG)
-
-    for name in ("measurement_gamma_start", "measurement_gamma_end"):
-        control = getattr(window, name, None)
-        if control is not None:
-            control.setRange(-GAMMA_LIMIT_DEG, GAMMA_LIMIT_DEG)
-
-    for name in ("measurement_c_start", "measurement_c_end"):
-        control = getattr(window, name, None)
-        if control is not None:
-            control.setRange(-C_LIMIT_DEG, C_LIMIT_DEG)
-
-    gamma_step = getattr(window, "measurement_gamma_step", None)
-    if gamma_step is not None:
-        gamma_step.setMaximum(2.0 * GAMMA_LIMIT_DEG)
-
-    c_step = getattr(window, "measurement_c_step", None)
-    if c_step is not None:
-        c_step.setMaximum(2.0 * C_LIMIT_DEG)
-
-    envelope = window.findChild(QLabel, "measurementEnvelope")
-    if envelope is not None:
-        envelope.setText(
-            f"Current enforced software envelope: Gamma ±{GAMMA_LIMIT_DEG:g}°  •  "
-            f"C ±{C_LIMIT_DEG:g}°"
-        )
-
-
 def main():
     app = QApplication(sys.argv)
 
@@ -168,14 +130,6 @@ def main():
     attach_async_manual_motion(window)
     attach_luxmeter_controls(window)
 
-    notice = window.findChild(QLabel, "readOnlyNotice")
-    if notice is not None:
-        notice.setText(
-            "HMI v0.3 — Confirmed motion envelope — "
-            f"Gamma ±{GAMMA_LIMIT_DEG:g}°, C ±{C_LIMIT_DEG:g}°. "
-            "Continuous bounded moves enabled."
-        )
-
     organize_main_window_tabs(window)
     attach_visualization_workspace_v2(window)
     attach_p9710_mode_workspace(window)
@@ -185,7 +139,7 @@ def main():
     attach_luxmeter_scroll_runtime(window)
     attach_measurement_runtime_v2(window)
 
-    _apply_confirmed_axis_limits(window)
+    apply_axis_limits_to_controls(window)
     attach_measurement_scroll_runtime(window)
 
     screen = app.primaryScreen()

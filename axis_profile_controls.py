@@ -26,6 +26,7 @@ from machine_config import (
     C_SCURVE_DEFAULT_MS,
 )
 from motion_controller import GAMMA, C_AXIS
+from motion_limit_controls import add_axis_limit_control
 
 
 def _build_axis_profile_box(window, axis, speed_default, ramp_default, scurve_default):
@@ -92,6 +93,8 @@ def _build_axis_profile_box(window, axis, speed_default, ramp_default, scurve_de
     layout.addWidget(scurve, 2, 1)
     layout.addWidget(apply_button, 3, 0, 1, 2)
     layout.addWidget(status, 4, 0, 1, 2)
+    limit_spin = add_axis_limit_control(window, axis, layout)
+    setattr(window, f"{axis.name.lower()}_limit_spin", limit_spin)
 
     layout.setColumnStretch(0, 1)
     layout.setColumnStretch(1, 1)

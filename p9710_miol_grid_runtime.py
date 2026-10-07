@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from machine_config import C_LIMIT_DEG, GAMMA_LIMIT_DEG
 from miol_icao import MIOL_PROFILES, icao_elevation_from_gamma, profile_type_from_text
 from motion_controller import C_AXIS, GAMMA
 
@@ -410,11 +409,13 @@ def attach_p9710_miol_grid_runtime(window):
         scan = getattr(window, "measurement_scan_mode_combo", None)
         if scan is not None:
             scan.setCurrentIndex(2)
-        window.measurement_c_start.setValue(max(-C_LIMIT_DEG, DEFAULT_C_START_DEG))
-        window.measurement_c_end.setValue(min(C_LIMIT_DEG, DEFAULT_C_END_DEG))
+        c_limit = window.motion.axis_limit_deg(C_AXIS)
+        gamma_limit = window.motion.axis_limit_deg(GAMMA)
+        window.measurement_c_start.setValue(max(-c_limit, DEFAULT_C_START_DEG))
+        window.measurement_c_end.setValue(min(c_limit, DEFAULT_C_END_DEG))
         window.measurement_c_step.setValue(DEFAULT_C_STEP_DEG)
-        window.measurement_gamma_start.setValue(max(-GAMMA_LIMIT_DEG, DEFAULT_GAMMA_START_DEG))
-        window.measurement_gamma_end.setValue(min(GAMMA_LIMIT_DEG, DEFAULT_GAMMA_END_DEG))
+        window.measurement_gamma_start.setValue(max(-gamma_limit, DEFAULT_GAMMA_START_DEG))
+        window.measurement_gamma_end.setValue(min(gamma_limit, DEFAULT_GAMMA_END_DEG))
         window.measurement_gamma_step.setValue(DEFAULT_GAMMA_STEP_DEG)
         distance = getattr(window, "measurement_distance_spin", None)
         if distance is not None:
@@ -453,10 +454,12 @@ def attach_p9710_miol_grid_runtime(window):
         c1 = window.measurement_c_end.value()
         g0 = window.measurement_gamma_start.value()
         g1 = window.measurement_gamma_end.value()
-        if min(c0, c1) < -C_LIMIT_DEG or max(c0, c1) > C_LIMIT_DEG:
-            raise ValueError(f"C scan must remain inside ±{C_LIMIT_DEG:g}°.")
-        if min(g0, g1) < -GAMMA_LIMIT_DEG or max(g0, g1) > GAMMA_LIMIT_DEG:
-            raise ValueError(f"Gamma scan must remain inside ±{GAMMA_LIMIT_DEG:g}°.")
+        c_limit = window.motion.axis_limit_deg(C_AXIS)
+        gamma_limit = window.motion.axis_limit_deg(GAMMA)
+        if min(c0, c1) < -c_limit or max(c0, c1) > c_limit:
+            raise ValueError(f"C scan must remain inside ±{c_limit:g}°.")
+        if min(g0, g1) < -gamma_limit or max(g0, g1) > gamma_limit:
+            raise ValueError(f"Gamma scan must remain inside ±{gamma_limit:g}°.")
         return _build_grid(
             c0, c1, window.measurement_c_step.value(),
             g0, g1, window.measurement_gamma_step.value(),

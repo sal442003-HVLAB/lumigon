@@ -25,7 +25,6 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QMessageBox
 
-from machine_config import C_LIMIT_DEG, GAMMA_LIMIT_DEG
 from measurement_progress_dialog_v2 import MeasurementProgressDialogV2
 from measurement_run import measurement_data_directory
 from motion_controller import C_AXIS, GAMMA
@@ -972,16 +971,18 @@ def attach_measurement_runtime_v2(window):
         gamma_start = window.measurement_v2_gamma_start.value()
         gamma_end = window.measurement_v2_gamma_end.value()
 
-        if max(abs(c_start), abs(c_end)) > C_LIMIT_DEG + 1e-9:
+        c_limit = window.motion.axis_limit_deg(C_AXIS)
+        gamma_limit = window.motion.axis_limit_deg(GAMMA)
+        if max(abs(c_start), abs(c_end)) > c_limit + 1e-9:
             return (
                 f"Requested C range exceeds the current Motion Control limit "
-                f"of ±{C_LIMIT_DEG:g}°."
+                f"of ±{c_limit:g}°."
             )
 
-        if max(abs(gamma_start), abs(gamma_end)) > GAMMA_LIMIT_DEG + 1e-9:
+        if max(abs(gamma_start), abs(gamma_end)) > gamma_limit + 1e-9:
             return (
                 f"Requested Gamma range exceeds the current Motion Control limit "
-                f"of ±{GAMMA_LIMIT_DEG:g}°."
+                f"of ±{gamma_limit:g}°."
             )
 
         return None

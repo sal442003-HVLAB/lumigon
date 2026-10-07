@@ -464,28 +464,6 @@ class MainWindow(QMainWindow):
                 zero_layout
             )
 
-            # ----------------------------------------------------
-            # Safety notice
-            # ----------------------------------------------------
-
-            notice = QLabel(
-                "HMI v0.3 — Commissioning Mode — "
-                "Absolute target limited to ±5°. "
-                "Each PR movement is limited to ≤1°."
-            )
-
-            notice.setAlignment(
-                Qt.AlignCenter
-            )
-
-            notice.setObjectName(
-                "readOnlyNotice"
-            )
-
-            main_layout.addWidget(
-                notice
-            )
-
             self.setCentralWidget(
                 central
             )

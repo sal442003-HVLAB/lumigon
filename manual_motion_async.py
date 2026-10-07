@@ -141,6 +141,10 @@ def attach_async_manual_motion(window):
         panel.angle_label.setText(f"{angle:+.4f}°")
 
     def set_motion_controls_enabled(enabled: bool):
+        for name in ("gamma_limit_spin", "c_limit_spin"):
+            control = getattr(window, name, None)
+            if control is not None:
+                control.setEnabled(bool(enabled))
         for panel in (window.gamma_panel, window.c_panel):
             for control in (
                 panel.jog_minus_button,

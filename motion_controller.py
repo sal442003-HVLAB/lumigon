@@ -1,4 +1,5 @@
 import time
+import math
 from dataclasses import dataclass
 
 from delta_modbus import DeltaModbus
@@ -77,6 +78,7 @@ class MotionController:
         self.modbus = modbus
         self.gamma_zero_puu = None
         self.c_zero_puu = None
+        self._axis_limits_deg = {GAMMA_ID: GAMMA_LIMIT_DEG, C_ID: C_LIMIT_DEG}
 
         self.gamma_expected_speed_raw = round(GAMMA_SPEED_DEFAULT_RPM * 10.0)
         self.c_expected_speed_raw = round(C_SPEED_DEFAULT_RPM * 10.0)
@@ -113,13 +115,19 @@ class MotionController:
     def puu_to_degree(axis: Axis, puu: int) -> float:
         return puu / axis.puu_per_degree / axis.sign
 
-    @staticmethod
-    def axis_limit_deg(axis: Axis) -> float:
-        if axis.slave_id == GAMMA_ID:
-            return GAMMA_LIMIT_DEG
-        if axis.slave_id == C_ID:
-            return C_LIMIT_DEG
-        raise RuntimeError(f"Unknown axis slave ID: {axis.slave_id}")
+    def axis_limit_deg(self, axis: Axis) -> float:
+        try:
+            return self._axis_limits_deg[axis.slave_id]
+        except KeyError:
+            raise RuntimeError(f"Unknown axis slave ID: {axis.slave_id}") from None
+
+    def set_axis_limit_deg(self, axis: Axis, limit: float):
+        """Set the symmetric software bound around Session Zero; no drive writes."""
+        self.axis_limit_deg(axis)  # Reject unknown axes before changing anything.
+        limit = float(limit)
+        if not math.isfinite(limit) or limit <= 0:
+            raise ValueError("Software limit must be a finite positive angle.")
+        self._axis_limits_deg[axis.slave_id] = limit
 
     def get_zero(self, axis: Axis) -> int:
         zero = (
@@ -262,6 +270,8 @@ class MotionController:
         )
 
     def execute_relative(self, axis: Axis, delta_degree: float):
+        if not math.isfinite(delta_degree):
+            raise ValueError("Relative angle must be finite.")
         axis_limit = self.axis_limit_deg(axis)
         max_relative_span = 2.0 * axis_limit
 
@@ -325,6 +335,8 @@ class MotionController:
         self.execute_relative(axis, delta_degree)
 
     def move_absolute(self, axis: Axis, target_degree: float):
+        if not math.isfinite(target_degree):
+            raise ValueError("Target angle must be finite.")
         axis_limit = self.axis_limit_deg(axis)
 
         if abs(target_degree) > axis_limit:

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from machine_config import ABSOLUTE_LIMIT_DEG
+from motion_controller import C_AXIS, GAMMA
 from measurement_execution import (
     SCAN_GRID,
     SCAN_SINGLE_C_GAMMA,
@@ -698,15 +699,17 @@ def build_measurement_workspace(window):
         if not build_plan():
             return
 
+        c_limit = window.motion.axis_limit_deg(C_AXIS)
+        gamma_limit = window.motion.axis_limit_deg(GAMMA)
         violations = []
         for point_index, (c_value, gamma_value) in enumerate(plan_points, start=1):
-            if abs(c_value) > ABSOLUTE_LIMIT_DEG + 1e-9:
+            if abs(c_value) > c_limit + 1e-9:
                 violations.append(
-                    f"Point {point_index}: C={c_value:g}° exceeds ±{ABSOLUTE_LIMIT_DEG:g}°"
+                    f"Point {point_index}: C={c_value:g}° exceeds ±{c_limit:g}°"
                 )
-            if abs(gamma_value) > ABSOLUTE_LIMIT_DEG + 1e-9:
+            if abs(gamma_value) > gamma_limit + 1e-9:
                 violations.append(
-                    f"Point {point_index}: Gamma={gamma_value:g}° exceeds ±{ABSOLUTE_LIMIT_DEG:g}°"
+                    f"Point {point_index}: Gamma={gamma_value:g}° exceeds ±{gamma_limit:g}°"
                 )
             if len(violations) >= 10:
                 break

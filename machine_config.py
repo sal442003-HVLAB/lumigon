@@ -78,21 +78,16 @@ C_SPEED_STEP_RPM = SPEED_STEP_RPM
 JOG_STEP_DEG = 1.0
 
 # ------------------------------------------------------------
-# Confirmed software motion envelopes around Session Zero
+# Default software motion limits around Session Zero
 # ------------------------------------------------------------
-# Current temporary software motion envelopes around Session Zero.
-# C is mechanically clear to ±80° in the present setup.
-# Gamma is limited to ±60°.
-# These remain software safety limits; a later V2 settings control may make
-# the C limit operator-configurable with 80° as its default.
-# Gamma axis: -60° ... +60°
-# C axis:     -80° ... +80°
+# Startup defaults; editable per axis in Motor Control. Runtime movement and
+# scan checks use MotionController.axis_limit_deg(), not these constants.
 GAMMA_LIMIT_DEG = 60.0
 C_LIMIT_DEG = 80.0
 
 # Legacy compatibility value for older UI/helper code. MotionController does
 # NOT use this shared value for safety checks; it enforces the per-axis limits
-# above. New code should prefer GAMMA_LIMIT_DEG / C_LIMIT_DEG.
+# selected by the operator. New code should use motion.axis_limit_deg(axis).
 ABSOLUTE_LIMIT_DEG = max(GAMMA_LIMIT_DEG, C_LIMIT_DEG)
 MAX_RELATIVE_MOVE_DEG = 2.0 * ABSOLUTE_LIMIT_DEG
 
