@@ -12,6 +12,7 @@ from main_window import MainWindow
 from motion_controller import C_AXIS, GAMMA, MotionController
 from motion_limit_controls import apply_axis_limits_to_controls
 from motor_control_refinement import attach_motor_control_refinement
+from manual_motion_async import attach_async_manual_motion
 from tabbed_layout import organize_main_window_tabs
 import measurement_runtime_v2 as runtime
 import motion_limit_controls as limits_ui
@@ -71,14 +72,15 @@ def test_invalid_limit_keeps_previous_bound(invalid):
     motion = MotionController(None)
     with pytest.raises(ValueError):
         motion.set_axis_limit_deg(GAMMA, invalid)
-    assert motion.axis_limit_deg(GAMMA) == 60.0
-    assert motion.axis_limit_deg(C_AXIS) == 80.0
+    assert motion.axis_limit_deg(GAMMA) == 45.0
+    assert motion.axis_limit_deg(C_AXIS) == 45.0
 
 
 def test_controls_sync_both_manual_and_scan_bounds_without_layout_changes(window):
     assert window.findChild(QLabel, "readOnlyNotice") is None
     for prefix, limit in (("gamma", 75.0), ("c", 120.0)):
         spin = getattr(window, f"{prefix}_limit_spin")
+        assert spin.value() == 45
         box = getattr(window, f"{prefix}_profile_box")
         assert box.layout().getItemPosition(box.layout().indexOf(spin)) == (3, 1, 1, 1)
         assert box.layout().horizontalSpacing() == 8
@@ -87,8 +89,10 @@ def test_controls_sync_both_manual_and_scan_bounds_without_layout_changes(window
         spin.editingFinished.emit()
         axis = GAMMA if prefix == "gamma" else C_AXIS
         assert window.motion.axis_limit_deg(axis) == limit
-        assert getattr(window, f"{prefix}_panel").target_spin.minimum() == -limit
-        assert getattr(window, f"{prefix}_panel").target_spin.maximum() == limit
+        target = getattr(window, f"{prefix}_panel").target_spin
+        target.setValue(limit + 5)
+        assert target.value() == limit + 5
+        assert f"Travel limit ±{limit:g}°" in getattr(window, f"{prefix}_profile_status_label").text()
         assert getattr(window, f"measurement_v2_{prefix}_start").minimum() == -limit
         assert getattr(window, f"measurement_v2_{prefix}_end").maximum() == limit
 
@@ -99,8 +103,8 @@ def test_limit_edit_is_rejected_during_motion_or_outside_new_bound(window, monke
     window.manual_motion_worker = object()
     window.gamma_limit_spin.setValue(70)
     window.gamma_limit_spin.editingFinished.emit()
-    assert window.motion.axis_limit_deg(GAMMA) == 60
-    assert window.gamma_limit_spin.value() == 60
+    assert window.motion.axis_limit_deg(GAMMA) == 45
+    assert window.gamma_limit_spin.value() == 45
     assert "finish" in warnings[-1]
     window.manual_motion_worker = None
     window.modbus = SimpleNamespace(is_connected=True, disconnect=lambda: None)
@@ -108,8 +112,33 @@ def test_limit_edit_is_rejected_during_motion_or_outside_new_bound(window, monke
     window.motion.get_current_angle = lambda *_: 40
     window.gamma_limit_spin.setValue(30)
     window.gamma_limit_spin.editingFinished.emit()
-    assert window.gamma_limit_spin.value() == 60
+    assert window.gamma_limit_spin.value() == 45
     assert "currently at" in warnings[-1]
+
+
+@pytest.mark.parametrize("axis,prefix", [(C_AXIS, "c"), (GAMMA, "gamma")])
+def test_outside_absolute_target_is_preserved_but_move_reports_current_limit(window, monkeypatch, axis, prefix):
+    attach_async_manual_motion(window)
+    warnings = []
+    monkeypatch.setattr(limits_ui.QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
+    def unexpected_io(*args):
+        pytest.fail("Invalid target must be rejected before reading feedback or starting a move")
+    monkeypatch.setattr(window.motion, "get_current_angle", unexpected_io)
+    spin = getattr(window, f"{prefix}_limit_spin")
+    spin.setValue(30)
+    spin.editingFinished.emit()
+    target = getattr(window, f"{prefix}_panel").target_spin
+    target.setValue(35)
+    assert target.value() == 35
+    getattr(window, f"{prefix}_panel").move_button.click()
+    assert len(warnings) == 1
+    assert "+35°" in warnings[0]
+    assert "±30°" in warnings[0]
+    assert window.manual_motion_worker is None
+    # Confirming the unchanged limit with Enter also reports the accepted value.
+    getattr(window, f"{prefix}_profile_status_label").setText("Previous status")
+    spin.editingFinished.emit()
+    assert f"Confirmed: {axis.name} Travel limit ±30°" == getattr(window, f"{prefix}_profile_status_label").text()
 
 
 def test_measurement_precheck_uses_selected_controller_limit(window, monkeypatch):

@@ -231,6 +231,15 @@ def attach_async_manual_motion(window):
             start_worker("jog", axis, float(delta_degree))
 
     def move_axis_to_target_async(self, axis, target_degree: float):
+        limit = self.motion.axis_limit_deg(axis)
+        if abs(target_degree) > limit:
+            QMessageBox.warning(
+                self,
+                "Movement Blocked",
+                f"{axis.name}: target {target_degree:+g}° is outside the current "
+                f"Travel limit of ±{limit:g}°.",
+            )
+            return
         if not precheck(self):
             return
         try:

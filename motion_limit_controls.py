@@ -1,4 +1,4 @@
-"""Keep Motor Control and scan inputs on the controller's selected bounds."""
+"""Configure travel bounds and keep scan inputs within the selected limits."""
 
 from PySide6.QtWidgets import QDoubleSpinBox, QLabel, QMessageBox
 
@@ -10,7 +10,9 @@ def apply_axis_limits_to_controls(window):
         limit = window.motion.axis_limit_deg(axis)
         panel = getattr(window, f"{prefix}_panel", None)
         if panel is not None:
-            panel.target_spin.setRange(-limit, limit)
+            # Accept the requested target verbatim; the move handler reports
+            # a limit violation instead of silently clamping the input.
+            panel.target_spin.setRange(-1_000_000_000.0, 1_000_000_000.0)
         for base in ("measurement", "measurement_v2"):
             for end in ("start", "end"):
                 control = getattr(window, f"{base}_{prefix}_{end}", None)
@@ -48,10 +50,16 @@ def add_axis_limit_control(window, axis, layout):
     layout.addWidget(limit_label, 3, 0)
     layout.addWidget(limit_spin, 3, 1)
 
+    def show_confirmation(value):
+        status = getattr(window, f"{axis.name.lower()}_profile_status_label", None)
+        if status is not None:
+            status.setText(f"Confirmed: {axis.name} Travel limit ±{value:g}°")
+
     def commit_limit():
         previous = window.motion.axis_limit_deg(axis)
         value = limit_spin.value()
         if value == previous:
+            show_confirmation(value)
             return
         try:
             for name in ("manual_motion_worker", "measurement_v2_worker",
@@ -68,6 +76,7 @@ def add_axis_limit_control(window, axis, layout):
                     )
             window.motion.set_axis_limit_deg(axis, value)
             apply_axis_limits_to_controls(window)
+            show_confirmation(value)
         except Exception as exc:
             limit_spin.setValue(previous)
             QMessageBox.warning(window, "Travel Limit", str(exc))

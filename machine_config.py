@@ -82,8 +82,8 @@ JOG_STEP_DEG = 1.0
 # ------------------------------------------------------------
 # Startup defaults; editable per axis in Motor Control. Runtime movement and
 # scan checks use MotionController.axis_limit_deg(), not these constants.
-GAMMA_LIMIT_DEG = 60.0
-C_LIMIT_DEG = 80.0
+GAMMA_LIMIT_DEG = 45.0
+C_LIMIT_DEG = 45.0
 
 # Legacy compatibility value for older UI/helper code. MotionController does
 # NOT use this shared value for safety checks; it enforces the per-axis limits

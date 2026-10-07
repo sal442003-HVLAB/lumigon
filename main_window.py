@@ -17,7 +17,6 @@ from motion_controller import (
 )
 
 from machine_config import (
-    ABSOLUTE_LIMIT_DEG,
     JOG_STEP_DEG,
 
 )
@@ -93,8 +92,8 @@ class AxisPanel(QGroupBox):
 
         self.target_spin = QDoubleSpinBox()
         self.target_spin.setRange(
-            -ABSOLUTE_LIMIT_DEG,
-            ABSOLUTE_LIMIT_DEG,
+            -1_000_000_000.0,
+            1_000_000_000.0,
         )
         self.target_spin.setDecimals(3)
         self.target_spin.setSingleStep(0.1)
