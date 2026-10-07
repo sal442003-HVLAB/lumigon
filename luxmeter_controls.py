@@ -209,6 +209,8 @@ def attach_luxmeter_controls(window):
         return None
 
     def _selected_instrument():
+        if getattr(window, "luxmeter_instrument_stack", None) is not None:
+            return LUXMETER_CG
         return instrument_combo.currentText()
 
     def _update_controls():
@@ -217,7 +219,11 @@ def attach_luxmeter_controls(window):
         live = _live_worker() is not None
         cg_selected = _selected_instrument() == LUXMETER_CG
 
-        instrument_combo.setEnabled(not connected and not live)
+        refresh_selection = getattr(window, "refresh_luxmeter_instrument_selection", None)
+        if callable(refresh_selection):
+            refresh_selection()
+        else:
+            instrument_combo.setEnabled(not connected and not live)
         port_combo.setEnabled(not connected and not live)
         refresh_ports_button.setEnabled(not connected and not live)
         connect_button.setEnabled(not connected and not live)
@@ -233,6 +239,9 @@ def attach_luxmeter_controls(window):
         stop_live_button.setEnabled(live)
 
     def instrument_changed(*_args):
+        if getattr(window, "luxmeter_instrument_stack", None) is not None:
+            _update_controls()
+            return
         selected = _selected_instrument()
         box.setTitle(f"Luxmeter — {selected}")
         window.luxmeter_selected_instrument = selected
@@ -480,6 +489,7 @@ def attach_luxmeter_controls(window):
     parent_layout.insertWidget(insert_index, box)
 
     window.luxmeter_box = box
+    window.luxmeter_connection_box = connection
     window.luxmeter_instrument_combo = instrument_combo
     window.luxmeter_selected_instrument = instrument_combo.currentText()
     window.luxmeter_port_combo = port_combo

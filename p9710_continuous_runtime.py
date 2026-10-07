@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QWidget,
 )
+from luxmeter_ui import refresh_instrument_selection
 
 
 CW_MODE_NAMES = (
@@ -98,6 +99,7 @@ def attach_p9710_continuous_runtime(window):
                 status.setText("Continuous: stopped")
                 status.setToolTip("")
                 status.setStyleSheet("color:#8FA9B9;")
+        refresh_instrument_selection(window)
 
     for index, mode_name in enumerate(CW_MODE_NAMES):
         page = stack.widget(index)
@@ -179,6 +181,7 @@ def attach_p9710_continuous_runtime(window):
                 stop_button.setEnabled(True)
                 status.setText(f"Continuous: running ({ms / 1000.0:.2f} s requested)")
                 status.setStyleSheet("color:#55EFC4; font-weight:700;")
+                refresh_instrument_selection(window)
                 if read_button.isEnabled():
                     read_button.click()
             return start
@@ -190,6 +193,7 @@ def attach_p9710_continuous_runtime(window):
                 stop_button.setEnabled(False)
                 status.setText("Continuous: stopped")
                 status.setStyleSheet("color:#8FA9B9;")
+                refresh_instrument_selection(window)
             return stop
 
         start_button.clicked.connect(

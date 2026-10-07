@@ -1,7 +1,7 @@
 """Safe vertical scrolling for the Lumigon Luxmeter tab.
 
-Each instrument page is wrapped in its own vertical QScrollArea so the device
-tab strip stays visible and each instrument retains its scroll position. Mouse-wheel input
+Each instrument page is wrapped in its own vertical QScrollArea so the instrument
+selector stays visible and each instrument retains its scroll position. Mouse-wheel input
 over spin boxes and combo boxes is redirected to page scrolling to avoid
 accidental parameter changes while navigating the page.
 """
@@ -46,10 +46,10 @@ class _LuxmeterNoWheelFilter(QObject):
 
 
 def attach_luxmeter_scroll_runtime(window):
-    """Keep instrument tabs visible; scroll each instrument independently."""
-    subtabs = getattr(window, "luxmeter_subtabs", None)
-    if subtabs is None:
-        raise RuntimeError("Luxmeter instrument tabs are not available for scrolling.")
+    """Keep the instrument selector visible; scroll each device independently."""
+    stack = getattr(window, "luxmeter_instrument_stack", None)
+    if stack is None:
+        raise RuntimeError("Luxmeter instrument workspace is not available for scrolling.")
     existing = getattr(window, "luxmeter_scroll_areas", None)
     if existing is not None:
         return existing
@@ -57,12 +57,11 @@ def attach_luxmeter_scroll_runtime(window):
     areas = []
     filters = []
     controls = []
-    current_index = subtabs.currentIndex()
+    current_index = stack.currentIndex()
     for page in (window.luxmeter_cg_tab, window.luxmeter_p9710_tab):
-        index = subtabs.indexOf(page)
-        label = subtabs.tabText(index)
-        subtabs.removeTab(index)
-        scroll = QScrollArea(subtabs)
+        index = stack.indexOf(page)
+        stack.removeWidget(page)
+        scroll = QScrollArea(stack)
         scroll.setObjectName(f"luxmeterInstrumentScroll{index}")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -73,7 +72,7 @@ def attach_luxmeter_scroll_runtime(window):
             f"QScrollArea#{scroll.objectName()} {{ border:none; background:#101820; }}"
             f"QScrollArea#{scroll.objectName()} > QWidget > QWidget {{ background:#101820; }}"
         )
-        subtabs.insertTab(index, scroll, label)
+        stack.insertWidget(index, scroll)
         filter_obj = _LuxmeterNoWheelFilter(scroll, page)
         page_controls = list(page.findChildren(QAbstractSpinBox))
         page_controls.extend(page.findChildren(QComboBox))
@@ -83,7 +82,7 @@ def attach_luxmeter_scroll_runtime(window):
         filters.append(filter_obj)
         controls.extend(page_controls)
         QTimer.singleShot(0, lambda scroll=scroll: scroll.verticalScrollBar().setValue(0))
-    subtabs.setCurrentIndex(current_index)
+    stack.setCurrentIndex(current_index)
     window.luxmeter_scroll_areas = areas
     window.luxmeter_no_wheel_filters = filters
     window.luxmeter_no_wheel_controls = controls

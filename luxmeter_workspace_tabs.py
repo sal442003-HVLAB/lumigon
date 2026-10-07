@@ -1,13 +1,10 @@
-"""Compact nested workspace for Luxmeter instruments.
+"""One Luxmeter workspace with a persistent instrument selector."""
 
-The top-level Luxmeter tab should stay simple. This module groups the existing
-Czibula/Grundmann controls and the P-9710 measurement panel into dedicated
-sub-tabs without changing acquisition logic.
-"""
+from PySide6.QtCore import QEvent, QObject, QSignalBlocker
+from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QLayout,
+                             QStackedWidget, QVBoxLayout, QWidget)
 
-from __future__ import annotations
-
-from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
+from luxmeter_controls import LUXMETER_CG, LUXMETER_GIGAHERTZ
 
 
 def _clear_layout(layout):
@@ -21,98 +18,113 @@ def _clear_layout(layout):
             _clear_layout(child_layout)
 
 
-def _make_page(*widgets):
+def _make_page(widget):
     page = QWidget()
     layout = QVBoxLayout(page)
+    layout.setSizeConstraint(QLayout.SetMinimumSize)
     layout.setContentsMargins(10, 10, 10, 10)
     layout.setSpacing(10)
-
-    for widget in widgets:
-        if widget is None:
-            continue
-        widget.setParent(page)
-        layout.addWidget(widget)
-
+    widget.setParent(page)
+    layout.addWidget(widget)
     layout.addStretch(1)
     return page
 
 
+class _SelectorNoWheel(QObject):
+    def eventFilter(self, obj, event):
+        return event.type() == QEvent.Type.Wheel
+
+
 def attach_luxmeter_workspace_tabs(window):
-    """Replace the crowded Luxmeter page with two instrument sub-tabs."""
-
-    if getattr(window, "luxmeter_subtabs", None) is not None:
-        return window.luxmeter_subtabs
-
+    """Keep the existing entry point, replacing device tabs with one selector."""
+    existing = getattr(window, "luxmeter_instrument_stack", None)
+    if existing is not None:
+        return existing
     host = getattr(window, "luxmeter_tab", None)
     if host is None or host.layout() is None:
         raise RuntimeError("Luxmeter top-level tab is not available.")
-
     cg_box = getattr(window, "luxmeter_box", None)
     p9710_box = getattr(window, "p9710_effective_box", None)
+    if cg_box is None or p9710_box is None:
+        raise RuntimeError("Both instrument workspaces must be attached first.")
 
-    if cg_box is None:
-        raise RuntimeError("C&G luxmeter controls must be attached first.")
-    if p9710_box is None:
-        raise RuntimeError("P-9710 panel must be attached first.")
+    selector = getattr(window, "luxmeter_instrument_combo", None)
+    if selector is None:
+        selector = QComboBox()
+        selector.addItems([LUXMETER_CG, LUXMETER_GIGAHERTZ])
+    connection = getattr(window, "luxmeter_connection_box", None)
+    if connection is not None:
+        grid = connection.layout()
+        grid.removeWidget(selector)
+        item = grid.itemAtPosition(0, 0)
+        if item is not None and item.widget() is not None:
+            label = item.widget()
+            grid.removeWidget(label)
+            label.hide()
+            label.deleteLater()
 
     root = host.layout()
     _clear_layout(root)
-    # Align the instrument tab strip with the main tab strip above it.
-    margins = root.contentsMargins()
-    root.setContentsMargins(0, margins.top(), 0, margins.bottom())
+    root.setContentsMargins(0, 8, 0, 8)
+    root.setSpacing(0)
+    chooser = QWidget(host)
+    chooser.setObjectName("luxmeterInstrumentChooser")
+    chooser_layout = QHBoxLayout(chooser)
+    chooser_layout.setContentsMargins(24, 6, 24, 6)
+    chooser_layout.setSpacing(12)
+    chooser_layout.addWidget(QLabel("Instrument:"))
+    selector.setParent(chooser)
+    selector.setMinimumWidth(300)
+    chooser_layout.addWidget(selector, 1)
+    chooser_layout.addStretch(1)
+    root.addWidget(chooser)
 
-    subtabs = QTabWidget(host)
-    subtabs.setObjectName("luxmeterSubTabs")
-    subtabs.setDocumentMode(True)
-    subtabs.setMovable(False)
-    subtabs.tabBar().setExpanding(False)
-    subtabs.tabBar().setDrawBase(False)
-
+    stack = QStackedWidget(host)
     cg_page = _make_page(cg_box)
     p9710_page = _make_page(p9710_box)
-
-    subtabs.addTab(cg_page, "C&G Ph-Amp MB7")
-    subtabs.addTab(p9710_page, "Gigahertz-Optik P-9710")
-
-    root.addWidget(subtabs, 1)
-
-    window.luxmeter_subtabs = subtabs
+    stack.addWidget(cg_page)
+    stack.addWidget(p9710_page)
+    root.addWidget(stack, 1)
+    window.luxmeter_instrument_stack = stack
+    window.luxmeter_instrument_combo = selector
+    window.luxmeter_instrument_chooser = chooser
     window.luxmeter_cg_tab = cg_page
     window.luxmeter_p9710_tab = p9710_page
+    current = {"index": 0}
 
-    # Make the second-level tabs visibly subordinate to the main application tabs.
-    host.setStyleSheet(
-        host.styleSheet()
-        + """
-        QTabWidget#luxmeterSubTabs::pane {
-            border: 1px solid #2B4050;
-            background-color: #101820;
-            top: 0px;
-        }
+    def busy():
+        for name in ("luxmeter_live_worker", "p9710_flash_timing_worker",
+                     "measurement_v2_worker", "measurement_worker", "p9710_miol_grid_worker"):
+            if getattr(window, name, None) is not None:
+                return True
+        holder = getattr(window, "p9710_mode_worker_holder", None)
+        if holder is not None and holder.get("worker") is not None:
+            return True
+        return any(timer.isActive() for timer in getattr(window, "p9710_continuous_timers", ()))
 
-        QTabWidget#luxmeterSubTabs > QTabBar {
-            border-bottom: 1px solid #2B4050;
-        }
+    def refresh_selection():
+        active = busy()
+        selector.setEnabled(not active)
+        selector.setToolTip(
+            "Stop Live or wait for the acquisition to finish before changing instrument."
+            if active else "Select the instrument; each device retains its own connection, settings and results."
+        )
+        return active
 
-        QTabWidget#luxmeterSubTabs > QTabBar::tab {
-            background-color: #16232D;
-            color: #BFCED8;
-            border: 1px solid #2B4050;
-            padding: 7px 14px;
-            margin-right: 2px;
-            border-top-left-radius: 8px;
-            border-top-right-radius: 8px;
-            border-bottom-left-radius: 0px;
-            border-bottom-right-radius: 0px;
-        }
+    def select_instrument(index):
+        if refresh_selection():
+            with QSignalBlocker(selector):
+                selector.setCurrentIndex(current["index"])
+            return
+        current["index"] = index
+        stack.setCurrentIndex(index)
+        window.luxmeter_selected_instrument = selector.currentText()
+        stack.updateGeometry()
 
-        QTabWidget#luxmeterSubTabs > QTabBar::tab:selected {
-            background-color: #1B5F91;
-            color: #FFFFFF;
-            border-color: #2D7FB9;
-        }
-
-        """
-    )
-
-    return subtabs
+    selector.currentIndexChanged.connect(select_instrument)
+    window.refresh_luxmeter_instrument_selection = refresh_selection
+    wheel_filter = _SelectorNoWheel(selector)
+    selector.installEventFilter(wheel_filter)
+    window.luxmeter_instrument_wheel_filter = wheel_filter
+    select_instrument(selector.currentIndex())
+    return stack

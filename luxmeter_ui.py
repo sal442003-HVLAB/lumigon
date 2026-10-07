@@ -1,9 +1,9 @@
 """Shared layout primitives for the two instrument workspaces."""
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import (
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QSizePolicy,
-    QToolButton, QVBoxLayout, QWidget,
+    QToolButton, QVBoxLayout, QWidget, QStackedWidget,
 )
 
 
@@ -42,6 +42,26 @@ def two_columns(left, right, parent=None):
     return host
 
 
+class CurrentPageStack(QStackedWidget):
+    """Let the visible mode determine the scroll height, not the longest mode."""
+
+    def sizeHint(self):
+        page = self.currentWidget()
+        return page.sizeHint() if page is not None else super().sizeHint()
+
+    def minimumSizeHint(self):
+        page = self.currentWidget()
+        if page is None:
+            return super().minimumSizeHint()
+        return QSize(0, page.sizeHint().height())
+
+
+def refresh_instrument_selection(window):
+    refresh = getattr(window, "refresh_luxmeter_instrument_selection", None)
+    if callable(refresh):
+        refresh()
+
+
 class CollapsibleSection(QWidget):
     def __init__(self, title, content, parent=None):
         super().__init__(parent)
@@ -70,4 +90,3 @@ class CollapsibleSection(QWidget):
         self.button.setChecked(expanded)
         self.button.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
         self.content.setVisible(expanded)
-

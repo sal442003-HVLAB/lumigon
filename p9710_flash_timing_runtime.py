@@ -14,7 +14,8 @@ electrical pulse-width measurement.
 
 from __future__ import annotations
 
-from luxmeter_ui import CollapsibleSection, form_section, result_section, two_columns
+from luxmeter_ui import (CollapsibleSection, form_section, result_section, two_columns,
+                         refresh_instrument_selection)
 
 import math
 import statistics
@@ -292,6 +293,7 @@ def attach_p9710_flash_timing_runtime(window):
             worker.deleteLater()
         worker_holder["worker"] = None
         window.p9710_flash_timing_worker = None
+        refresh_instrument_selection(window)
         measure_button.setEnabled(True)
         range_spin.setEnabled(True)
         capture_spin.setEnabled(True)
@@ -360,6 +362,7 @@ def attach_p9710_flash_timing_runtime(window):
         )
         worker_holder["worker"] = worker
         window.p9710_flash_timing_worker = worker
+        refresh_instrument_selection(window)
         worker.measured.connect(completed)
         worker.failed.connect(failed)
         worker.finished.connect(finish_worker)

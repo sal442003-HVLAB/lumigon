@@ -8,7 +8,7 @@ from PySide6.QtCore import QObject, QPoint, QPointF, Qt, Signal
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
     QApplication, QGroupBox, QLabel, QProgressBar, QPushButton, QSpinBox,
-    QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget, QAbstractSpinBox, QTabWidget,
 )
 
 import p9710_mode_workspace as modes
@@ -33,9 +33,153 @@ def workspace(app):
     modes.attach_p9710_mode_workspace(window)
     attach_p9710_continuous_runtime(window)
     yield window
+    window.p9710_stop_continuous()
     window.close()
     window.deleteLater()
     app.processEvents()
+
+
+@pytest.fixture
+def instrument_workspace(app):
+    from main_window import MainWindow
+    from luxmeter_controls import attach_luxmeter_controls
+    from tabbed_layout import organize_main_window_tabs
+    window = MainWindow()
+    attach_luxmeter_controls(window)
+    organize_main_window_tabs(window)
+    modes.attach_p9710_mode_workspace(window)
+    attach_p9710_continuous_runtime(window)
+    attach_luxmeter_workspace_tabs(window)
+    attach_p9710_flash_timing_runtime(window)
+    attach_luxmeter_scroll_runtime(window)
+    window.main_tabs.setCurrentIndex(1)
+    window.resize(1366, 768)
+    window.show()
+    for _ in range(4):
+        app.processEvents()
+    yield window
+    window.p9710_stop_continuous()
+    window.timer.stop()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_instrument_switch_retains_each_connected_device_settings_and_results(instrument_workspace, app):
+    window = instrument_workspace
+    selector = window.luxmeter_instrument_combo
+    assert window.luxmeter_tab.findChildren(QTabWidget) == []
+    window.luxmeter = SimpleNamespace(is_connected=True)
+    window.luxmeter_port_combo.setCurrentText("COM9-custom")
+    window.luxmeter_sensitivity_spin.setValue(12.345)
+    window.luxmeter_lux_label.setText("Lux: 123.456 lx")
+    window.luxmeter_id_label.setText("Firmware: CG-TEST")
+    selector.setCurrentIndex(1)
+    window.p9710_meter_holder["meter"] = SimpleNamespace(is_connected=True)
+    window.p9710_port_combo.setCurrentText("COM7-custom")
+    window.p9710_mode_combo.setCurrentIndex(6)
+    window.p9710_effective_period_spin.setValue(2.5)
+    result = window.p9710_mode_stack.widget(6).measurement_results_box.findChildren(QLabel)[0]
+    result.setText("E-effective: 45.678 lx")
+    selector.setCurrentIndex(0)
+    assert window.luxmeter_port_combo.currentText() == "COM9-custom"
+    assert window.luxmeter_sensitivity_spin.value() == 12.345
+    assert window.luxmeter_lux_label.text() == "Lux: 123.456 lx"
+    assert window.luxmeter_id_label.text() == "Firmware: CG-TEST"
+    assert window.luxmeter.is_connected
+    selector.setCurrentIndex(1)
+    assert window.p9710_port_combo.currentText() == "COM7-custom"
+    assert window.p9710_mode_combo.currentIndex() == 6
+    assert window.p9710_effective_period_spin.value() == 2.5
+    assert result.text() == "E-effective: 45.678 lx"
+    assert window.p9710_meter_holder["meter"].is_connected
+    assert selector.isEnabled()
+
+
+@pytest.mark.parametrize("operation", ["cg_live", "cw", "effective", "timing", "continuous"])
+def test_instrument_cannot_switch_during_acquisition(instrument_workspace, app, monkeypatch, operation):
+    window = instrument_workspace
+    selector = window.luxmeter_instrument_combo
+    selector.setCurrentIndex(1)
+    if operation == "cg_live":
+        window.luxmeter_live_worker = SimpleNamespace(isRunning=lambda: True)
+        clear = lambda: setattr(window, "luxmeter_live_worker", None)
+    elif operation == "timing":
+        window.p9710_flash_timing_worker = object()
+        clear = lambda: setattr(window, "p9710_flash_timing_worker", None)
+    elif operation == "continuous":
+        window.p9710_continuous_timers[0].start(10000)
+        clear = window.p9710_stop_continuous
+    else:
+        window.p9710_mode_worker_holder["worker"] = object()
+        clear = lambda: window.p9710_mode_worker_holder.update(worker=None)
+    window.refresh_luxmeter_instrument_selection()
+    assert not selector.isEnabled()
+    selector.setCurrentIndex(0)  # Programmatic changes must also be rejected.
+    assert selector.currentIndex() == 1
+    assert window.luxmeter_instrument_stack.currentIndex() == 1
+    clear()
+    window.refresh_luxmeter_instrument_selection()
+    assert selector.isEnabled()
+    selector.setCurrentIndex(0)
+    assert window.luxmeter_instrument_stack.currentIndex() == 0
+
+
+def test_mode_pages_keep_connection_and_advanced_controls_visible_with_scroll(instrument_workspace, app):
+    window = instrument_workspace
+    window.luxmeter_instrument_combo.setCurrentIndex(1)
+    for mode in (0, 6, 2, 6, 0):
+        window.p9710_mode_combo.setCurrentIndex(mode)
+        for _ in range(4):
+            app.processEvents()
+        page = window.p9710_mode_stack.currentWidget()
+        assert window.p9710_connection_box.parentWidget() is page
+        assert window.p9710_mode_combo.parentWidget() is page.measurement_settings_box
+        assert window.p9710_connection_box.isVisible()
+        assert window.p9710_mode_combo.isVisible()
+        assert window.p9710_mode_stack.geometry().bottom() < window.p9710_effective_box.height()
+        assert window.p9710_flash_timing_section.y() > window.p9710_effective_box.geometry().bottom()
+        if mode == 6:
+            content = window.p9710_effective_advanced_section.content
+            assert content.isVisible()
+            assert all(spin.height() >= 16 for spin in content.findChildren(QAbstractSpinBox))
+            assert window.luxmeter_scroll_areas[1].verticalScrollBar().maximum() > 0
+
+
+@pytest.mark.parametrize("operation", ["cw", "effective", "timing"])
+def test_instrument_selector_locks_at_worker_start_and_unlocks_on_finish(instrument_workspace, monkeypatch, operation):
+    window = instrument_workspace
+    window.luxmeter_instrument_combo.setCurrentIndex(1)
+    window.p9710_meter_holder["meter"] = SimpleNamespace(is_connected=True)
+    workers = []
+    class PendingWorker(QObject):
+        measured = Signal(object)
+        failed = Signal(str)
+        finished = Signal()
+        def __init__(self, *args, parent=None, **kwargs):
+            super().__init__(parent)
+            workers.append(self)
+        def start(self):
+            assert not window.luxmeter_instrument_combo.isEnabled()
+    if operation == "cw":
+        monkeypatch.setattr(modes, "CWWorker", PendingWorker)
+        page = window.p9710_mode_stack.widget(0)
+        next(b for b in page.findChildren(QPushButton) if b.text() == "Read CW").click()
+    elif operation == "effective":
+        monkeypatch.setattr(modes, "EffectiveWorker", PendingWorker)
+        window.p9710_mode_combo.setCurrentIndex(6)
+        window.p9710_effective_period_spin.setValue(2.0)
+        page = window.p9710_mode_stack.widget(6)
+        next(b for b in page.findChildren(QPushButton) if b.text() == "Measure synchronized").click()
+    else:
+        import p9710_flash_timing_runtime as timing
+        monkeypatch.setattr(timing, "PulseTimingWorker", PendingWorker)
+        next(b for b in window.p9710_flash_timing_box.findChildren(QPushButton)
+             if b.text() == "Measure period / duration").click()
+    assert len(workers) == 1
+    assert not window.luxmeter_instrument_combo.isEnabled()
+    workers[0].finished.emit()
+    assert window.luxmeter_instrument_combo.isEnabled()
 
 
 class ImmediateWorker(QObject):
@@ -157,10 +301,10 @@ def test_instrument_scroll_is_independent_and_wheel_does_not_change_range(worksp
     attach_luxmeter_workspace_tabs(workspace)
     attach_p9710_flash_timing_runtime(workspace)
     areas = attach_luxmeter_scroll_runtime(workspace)
-    assert workspace.luxmeter_subtabs.count() == 2
+    assert workspace.luxmeter_instrument_stack.count() == 2
     assert workspace.p9710_mode_stack.count() == 7
     workspace.resize(1366, 430)
-    workspace.luxmeter_subtabs.setCurrentIndex(1)
+    workspace.luxmeter_instrument_combo.setCurrentIndex(1)
     workspace.p9710_flash_timing_section.set_expanded(True)
     workspace.show()
     app.processEvents()
@@ -169,7 +313,7 @@ def test_instrument_scroll_is_independent_and_wheel_does_not_change_range(worksp
     spin = next(s for s in workspace.p9710_mode_stack.widget(0).findChildren(QSpinBox)
                 if s.maximum() == 7)
     original = spin.value()
-    tab_position = workspace.luxmeter_subtabs.tabBar().pos()
+    selector_position = workspace.luxmeter_instrument_combo.pos()
     event = QWheelEvent(QPointF(2, 2), QPointF(2, 2), QPoint(), QPoint(0, -120),
                         Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
                         Qt.ScrollPhase.NoScrollPhase, False)
@@ -177,14 +321,14 @@ def test_instrument_scroll_is_independent_and_wheel_does_not_change_range(worksp
     assert spin.value() == original
     assert scroll.verticalScrollBar().value() > 0
     retained = scroll.verticalScrollBar().value()
-    workspace.luxmeter_subtabs.setCurrentIndex(0)
+    workspace.luxmeter_instrument_combo.setCurrentIndex(0)
     app.processEvents()
     assert areas[0].verticalScrollBar().value() == 0
-    workspace.luxmeter_subtabs.setCurrentIndex(1)
+    workspace.luxmeter_instrument_combo.setCurrentIndex(1)
     app.processEvents()
     assert scroll.verticalScrollBar().value() == retained
-    assert workspace.luxmeter_subtabs.tabBar().pos() == tab_position
-    assert workspace.luxmeter_subtabs.tabBar().isVisible()
+    assert workspace.luxmeter_instrument_combo.pos() == selector_position
+    assert workspace.luxmeter_instrument_combo.isVisible()
 
 
 def test_continuous_stops_before_the_error_dialog_and_does_not_retry(workspace, monkeypatch, app):
@@ -241,7 +385,10 @@ def test_continuous_keeps_polling_with_the_reported_gs7_60(workspace, monkeypatc
     interval = next(s for s in page.findChildren(modes.QDoubleSpinBox) if s.suffix() == ' s')
     interval.setValue(.05)
     next(b for b in page.findChildren(QPushButton) if b.text() == 'Start continuous').click()
-    QTest.qWait(180)
+    for _ in range(20):
+        if meter.serial.sent.count('MV') >= 3:
+            break
+        QTest.qWait(50)
     assert workspace.p9710_continuous_timers[0].isActive()
     assert meter.serial.sent.count('MV') >= 3
     assert not errors
@@ -288,7 +435,10 @@ def test_cw_can_read_again_after_effective_fast_integration_is_rejected(workspac
     assert workspace.p9710_mode_worker_holder['worker'] is None
     workspace.p9710_mode_combo.setCurrentIndex(0)
     next(b for b in cw_page.findChildren(QPushButton) if b.text() == 'Start continuous').click()
-    QTest.qWait(250)
+    for _ in range(20):
+        if meter.serial.sent.count('MV') >= 3:
+            break
+        QTest.qWait(50)
     assert workspace.p9710_continuous_timers[0].isActive()
     assert meter.serial.sent.count('MV') >= 3
     assert len(errors) == 1

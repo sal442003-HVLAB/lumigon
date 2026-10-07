@@ -9,26 +9,29 @@ Peak-to-Peak and synchronized I-Effective (Schmidt-Clausen).
 from __future__ import annotations
 
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QMessageBox,
     QProgressBar,
     QPushButton,
     QSpinBox,
-    QStackedWidget,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from p9710 import P9710
 from p9710_range_policy import GP_SATURATION_REFERENCE, normalized_range_use
-from luxmeter_ui import CollapsibleSection, form_section, result_section, two_columns
+from luxmeter_ui import (CollapsibleSection, CurrentPageStack, form_section,
+                         result_section, refresh_instrument_selection)
+from serial.tools import list_ports
 
 
 DEFAULT_PORT = "COM7"
@@ -184,7 +187,7 @@ def attach_p9710_mode_workspace(window):
     parent = lux_box.parentWidget()
     parent_layout = parent.layout()
 
-    box = QGroupBox("Gigahertz-Optik P-9710")
+    box = QGroupBox("Luxmeter — Gigahertz-Optik P-9710")
     root = QVBoxLayout(box)
     root.setContentsMargins(10, 10, 10, 10)
     root.setSpacing(10)
@@ -195,40 +198,42 @@ def attach_p9710_mode_workspace(window):
     port_combo.setEditable(True)
     port_combo.addItem(DEFAULT_PORT)
     port_combo.setCurrentText(DEFAULT_PORT)
-    port_combo.setFixedWidth(220)
 
     connect_button = QPushButton("Connect P-9710")
-    connect_button.setFixedWidth(180)
     disconnect_button = QPushButton("Disconnect")
-    disconnect_button.setFixedWidth(150)
-    connection_status = QLabel("Disconnected")
-    connection_status.setStyleSheet("color:#8FA9B9;")
+    connection_status = QLabel("● Disconnected")
+    connection_status.setStyleSheet("color:#FF7675; font-weight:700;")
 
     mode_combo = QComboBox()
     mode_combo.addItems(MODE_NAMES)
-    mode_combo.setFixedWidth(320)
+    refresh_ports_button = QPushButton("Refresh Ports")
+
+    def refresh_ports():
+        current = port_combo.currentText()
+        port_combo.clear()
+        port_combo.addItems([port.device for port in list_ports.comports()])
+        port_combo.setCurrentText(current)
+
+    refresh_ports_button.clicked.connect(refresh_ports)
 
     header.addWidget(QLabel("Port:"), 0, 0)
-    header.addWidget(port_combo, 0, 1)
-    header.addWidget(connect_button, 0, 2)
-    header.addWidget(disconnect_button, 0, 3)
-    header.addWidget(connection_status, 0, 4, 1, 2)
-    header.addWidget(QLabel("Measurement mode:"), 1, 0)
-    header.addWidget(mode_combo, 1, 1, 1, 2)
-    header.setColumnStretch(0, 0)
-    header.setColumnStretch(1, 0)
-    header.setColumnStretch(2, 0)
-    header.setColumnStretch(3, 0)
-    header.setColumnStretch(4, 1)
+    header.addWidget(port_combo, 0, 1, 1, 2)
+    header.addWidget(refresh_ports_button, 0, 3)
+    actions = QHBoxLayout()
+    actions.setSpacing(12)
+    actions.addWidget(connect_button)
+    actions.addWidget(disconnect_button)
+    actions.addStretch(1)
+    actions.addWidget(connection_status)
+    header.addLayout(actions, 1, 0, 1, 4)
+    header.setColumnStretch(1, 1)
     connection_box = QGroupBox("Connection")
     connection_box.setLayout(header)
     header.setContentsMargins(14, 16, 14, 14)
     header.setHorizontalSpacing(12)
     header.setVerticalSpacing(12)
     connection_status.setWordWrap(True)
-    root.addWidget(connection_box)
-
-    stack = QStackedWidget()
+    stack = CurrentPageStack()
     root.addWidget(stack)
 
     meter_holder = {"meter": None}
@@ -272,17 +277,27 @@ def attach_p9710_mode_workspace(window):
         meter_holder["meter"] = None
         period_spin.setValue(DEFAULT_PERIOD_S)
         clear_effective_results()
-        connection_status.setText("Disconnected")
-        connection_status.setStyleSheet("color:#8FA9B9;")
+        connection_status.setText("● Disconnected")
+        connection_status.setStyleSheet("color:#FF7675; font-weight:700;")
 
     connect_button.clicked.connect(connect_meter)
     disconnect_button.clicked.connect(disconnect_meter)
 
+    def arrange_page(page, settings, results):
+        layout = QGridLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        settings.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        results.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        layout.addWidget(settings, 1, 0)
+        layout.addWidget(results, 0, 1, 2, 1)
+        page.measurement_settings_box = settings
+        page.measurement_results_box = results
+
     def make_cw_page(mode_name: str, value_field: str, accumulated: bool = False):
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
 
         integration = QDoubleSpinBox()
         integration.setRange(0.1, 6000.0)
@@ -290,12 +305,12 @@ def attach_p9710_mode_workspace(window):
         integration.setSingleStep(10.0)
         integration.setSuffix(" ms")
         integration.setValue(DEFAULT_INTEGRATION_MS)
-        integration.setFixedWidth(150)
+        integration.setMinimumWidth(110)
 
         range_spin = QSpinBox()
         range_spin.setRange(0, 7)
         range_spin.setValue(DEFAULT_RANGE)
-        range_spin.setFixedWidth(100)
+        range_spin.setMinimumWidth(110)
         sync_box = QCheckBox("CW synchronisation")
 
         range_hint = QLabel(_range_interval_text(DEFAULT_RANGE))
@@ -309,7 +324,7 @@ def attach_p9710_mode_workspace(window):
             reset_button.setFixedWidth(140)
 
         result = QLabel(f"{mode_name}: —")
-        result.setStyleSheet("font-size:16pt; font-weight:700; color:#E7F2F8;")
+        result.setStyleSheet("font-size:22pt; font-weight:700; color:#55EFC4;")
         cw_label = QLabel("CW: —")
         peak_max_label = QLabel("Peak max: —")
         peak_min_label = QLabel("Peak min: —")
@@ -332,13 +347,14 @@ def attach_p9710_mode_workspace(window):
         settings.layout().addRow(page.continuous_controls_layout)
         results = result_section("Live reading", result, cw_label, peak_max_label,
                                  peak_min_label, p2p_label, utilization_text, utilization_bar)
-        layout.addWidget(two_columns(settings, results, page))
+        arrange_page(page, settings, results)
 
         def finish_worker():
             worker = worker_holder["worker"]
             if worker is not None:
                 worker.deleteLater()
             worker_holder["worker"] = None
+            refresh_instrument_selection(window)
             read_button.setEnabled(True)
             if reset_button is not None:
                 reset_button.setEnabled(True)
@@ -408,6 +424,7 @@ def attach_p9710_mode_workspace(window):
                 parent=window,
             )
             worker_holder["worker"] = worker
+            refresh_instrument_selection(window)
             worker.measured.connect(completed)
             worker.failed.connect(failed)
             worker.finished.connect(finish_worker)
@@ -433,9 +450,6 @@ def attach_p9710_mode_workspace(window):
 
     # I-Effective (Schmidt-Clausen) page.
     effective_page = QWidget()
-    egrid = QVBoxLayout(effective_page)
-    egrid.setContentsMargins(8, 8, 8, 8)
-    egrid.setSpacing(12)
 
     period_spin = QDoubleSpinBox()
     period_spin.setRange(0.0, 120.0)
@@ -443,25 +457,25 @@ def attach_p9710_mode_workspace(window):
     period_spin.setSuffix(" s")
     period_spin.setValue(DEFAULT_PERIOD_S)
     period_spin.setToolTip("Enter the measured pulse period before starting. Zero means not entered.")
-    period_spin.setFixedWidth(140)
+    period_spin.setMinimumWidth(110)
 
     pre_spin = QSpinBox()
     pre_spin.setRange(0, 5000)
     pre_spin.setSuffix(" ms")
     pre_spin.setValue(DEFAULT_PRETRIGGER_MS)
-    pre_spin.setFixedWidth(120)
+    pre_spin.setMinimumWidth(110)
 
     window_spin = QSpinBox()
     window_spin.setRange(100, 10000)
     window_spin.setSingleStep(10)
     window_spin.setSuffix(" ms")
     window_spin.setValue(DEFAULT_WINDOW_MS)
-    window_spin.setFixedWidth(120)
+    window_spin.setMinimumWidth(110)
 
     range_spin = QSpinBox()
     range_spin.setRange(0, 7)
     range_spin.setValue(DEFAULT_RANGE)
-    range_spin.setFixedWidth(100)
+    range_spin.setMinimumWidth(110)
     range_hint = QLabel(_range_interval_text(DEFAULT_RANGE))
     range_hint.setStyleSheet("color:#8FA9B9;")
     range_spin.valueChanged.connect(lambda v: range_hint.setText(_range_interval_text(v)))
@@ -471,21 +485,21 @@ def attach_p9710_mode_workspace(window):
     threshold_spin.setDecimals(3)
     threshold_spin.setSuffix(" lx")
     threshold_spin.setValue(DEFAULT_THRESHOLD_LX)
-    threshold_spin.setFixedWidth(140)
+    threshold_spin.setMinimumWidth(110)
 
     c_spin = QDoubleSpinBox()
     c_spin.setDecimals(4)
     c_spin.setRange(0.0001, 5.9999)
     c_spin.setSuffix(" s")
     c_spin.setValue(DEFAULT_C_S)
-    c_spin.setFixedWidth(120)
+    c_spin.setMinimumWidth(110)
 
     distance_spin = QDoubleSpinBox()
     distance_spin.setRange(0.01, 1000.0)
     distance_spin.setDecimals(3)
     distance_spin.setSuffix(" m")
     distance_spin.setValue(5.0)
-    distance_spin.setFixedWidth(120)
+    distance_spin.setMinimumWidth(110)
 
     e_button = QPushButton("Measure synchronized")
     e_button.setMinimumWidth(190)
@@ -522,7 +536,7 @@ def attach_p9710_mode_workspace(window):
     settings.layout().addRow(e_button)
     results = result_section("Effective measurement", e_result, i_result, trigger_result,
                              e_status, e_gp_text, e_gp_bar)
-    egrid.addWidget(two_columns(settings, results, effective_page))
+    arrange_page(effective_page, settings, results)
     effective_inputs = (period_spin, pre_spin, window_spin, range_spin,
                         threshold_spin, c_spin, distance_spin)
 
@@ -531,6 +545,7 @@ def attach_p9710_mode_workspace(window):
         if worker is not None:
             worker.deleteLater()
         worker_holder["worker"] = None
+        refresh_instrument_selection(window)
         e_button.setEnabled(True)
         for control in effective_inputs:
             control.setEnabled(True)
@@ -617,6 +632,7 @@ def attach_p9710_mode_workspace(window):
             parent=window,
         )
         worker_holder["worker"] = worker
+        refresh_instrument_selection(window)
         worker.measured.connect(effective_completed)
         worker.failed.connect(effective_failed)
         worker.finished.connect(effective_finished)
@@ -625,8 +641,52 @@ def attach_p9710_mode_workspace(window):
     e_button.clicked.connect(start_effective)
     stack.addWidget(effective_page)
 
-    mode_combo.currentIndexChanged.connect(stack.setCurrentIndex)
-    stack.setCurrentIndex(0)
+    def update_mode_height():
+        page = stack.currentWidget()
+        if page is not None:
+            page.layout().activate()
+            stack.setMinimumHeight(page.sizeHint().height())
+            stack.updateGeometry()
+            root.invalidate()
+            box.setMinimumHeight(box.minimumSizeHint().height())
+            box.updateGeometry()
+            parent = box.parentWidget()
+            if parent is not None and parent is getattr(window, "luxmeter_p9710_tab", None):
+                layout = parent.layout()
+                index = layout.indexOf(box)
+                if index >= 0:
+                    # Refresh Qt's cached item height after changing modes so
+                    # the timing section follows the full measurement panel.
+                    layout.removeWidget(box)
+                    layout.insertWidget(index, box)
+                    layout.activate()
+
+    def show_mode(index):
+        old_parent = connection_box.parentWidget()
+        if old_parent is not None and old_parent.layout() is not None:
+            old_parent.layout().removeWidget(connection_box)
+        page = stack.widget(index)
+        old_settings = mode_combo.parentWidget()
+        if old_settings is not None:
+            row = old_settings.layout().takeRow(mode_combo)
+            if row.labelItem is not None and row.labelItem.widget() is not None:
+                row.labelItem.widget().deleteLater()
+        settings = page.measurement_settings_box
+        mode_combo.setParent(settings)
+        settings.layout().insertRow(0, "Measurement mode:", mode_combo)
+        mode_combo.show()
+        connection_box.setParent(page)
+        connection_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        page.layout().addWidget(connection_box, 0, 0)
+        page.layout().setRowStretch(1, 1)
+        connection_box.show()
+        stack.setCurrentIndex(index)
+        update_mode_height()
+        QTimer.singleShot(0, update_mode_height)
+
+    mode_combo.currentIndexChanged.connect(show_mode)
+    advanced_section.button.toggled.connect(lambda _: QTimer.singleShot(0, update_mode_height))
+    show_mode(0)
 
     note = QLabel(
         "CW Maximum/Minimum are accumulated by Lumigon from successive CW reads. "
@@ -639,10 +699,11 @@ def attach_p9710_mode_workspace(window):
     insert_index = parent_layout.indexOf(getattr(window, "luxmeter_effective_box", lux_box))
     parent_layout.insertWidget(insert_index + 1 if insert_index >= 0 else parent_layout.count(), box)
 
-    # Keep the existing attribute name so luxmeter_workspace_tabs can move this
-    # complete workspace into the Gigahertz-Optik sub-tab.
+    # Keep the existing attribute name for the shared instrument workspace.
     window.p9710_effective_box = box
     window.p9710_mode_combo = mode_combo
+    window.p9710_connection_box = connection_box
+    window.p9710_port_combo = port_combo
     window.p9710_mode_stack = stack
     window.p9710_meter_holder = meter_holder
     window.p9710_mode_worker_holder = worker_holder
