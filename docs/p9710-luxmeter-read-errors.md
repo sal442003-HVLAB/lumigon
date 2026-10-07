@@ -38,3 +38,31 @@ V4.4 behavior still needs an operator retry; unknown readbacks remain blocked.
 
 Manufacturer manual mirror:
 https://manualzz.com/doc/25024185/gigahertz-optik-p-9710-1--2-optometer-operating-manual
+
+## Effective setup rejects SN1
+
+A later operator screenshot shows `SN1: ?1` on the Effective page. This
+fails during the fast CW setup used to detect the reference flash, before
+`MV` triggering or `MI` acquisition. `SN1` requests a 0.1 ms CW integration;
+it does not set the Effective measurement window. The V4.7 manual documents
+this value, but the V4.4 screenshot does not establish why the setter was
+disallowed (firmware capability, current state, or another restriction).
+
+If an `SN` setter returns exactly `?1`, the driver now queries `GS3`, whose
+unit is also 0.1 ms. It continues only when the complete numeric reply is
+finite and exactly matches the requested tick count. In particular, `GS3=1`
+permits `SN1: ?1` to proceed; `GS3=1000` means 100 ms and must block the flash
+measurement. Unknown, malformed, missing or error replies also block it.
+The error reports the returned and required settings and asks the operator
+to stop any front-panel measurement, select Mode / Remote RS232, and set the
+required CW integration. No slower integration or altered threshold is
+silently substituted. Other setter error codes retain their original failure.
+
+Flash detection now verifies range, autorange and integration even when the
+setter succeeds. This shared setup covers synchronized Effective, adaptive
+Effective and flash timing. Simulated regression tests exercise the full
+Effective command sequence through an unchanged `MI` value with matching
+readback, and prove that no `MV` or `MI` is issued with a mismatched setting.
+Hardware resolution still requires an operator retry and, if blocked, the
+new GS3 readback from the error. This is a verified-state fallback, not proof
+that V4.4 always accepts remote integration changes.

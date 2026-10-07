@@ -201,7 +201,34 @@ class P9710:
             raise ValueError("CW integration time must be between 0.1 ms and 6000 ms.")
         self.command("SB0")
         self.command(f"SR{int(range_id)}")
-        self.command(f"SN{int(round(float(integration_ms) * 10.0))}")
+        integration_ticks = int(round(float(integration_ms) * 10.0))
+        try:
+            self.command(f"SN{integration_ticks}")
+        except P9710CommandError as exc:
+            # V4.4 was observed rejecting SN1 during flash setup. A rejected
+            # setter is harmless only if the required setting is already in
+            # effect; never silently use a slower integration for triggering.
+            if exc.reply != "?1":
+                raise
+            guidance = (
+                "Stop any front-panel measurement, select Mode / Remote RS232, "
+                f"and set the meter's CW integration time to {integration_ticks / 10:g} ms. "
+                "Acquisition rejected until the required setting is confirmed."
+            )
+            try:
+                raw = self.query("GS3", wait_s=0.005)
+                actual = float(raw.strip())
+            except (P9710Error, ValueError) as readback_error:
+                raise P9710Error(
+                    f"{exc}. CW integration could not be verified using GS3: "
+                    f"{readback_error}. {guidance}"
+                ) from exc
+            if not math.isfinite(actual) or actual != integration_ticks:
+                raise P9710Error(
+                    f"{exc}. GS3 returned {raw!r} (0.1 ms ticks); "
+                    f"required {integration_ticks} ticks ({integration_ticks / 10:g} ms). "
+                    f"{guidance}"
+                ) from exc
         try:
             self.command("SS1" if sync_enabled else "SS0")
         except P9710CommandError as exc:
@@ -260,7 +287,7 @@ class P9710:
         )
 
     def configure_flash_detection(self, range_id: int = 5):
-        self.configure_cw(integration_ms=0.1, range_id=range_id, sync_enabled=False)
+        self.configure_cw(integration_ms=0.1, range_id=range_id, sync_enabled=False, verify=True)
         time.sleep(0.05)
 
     def configure_effective(self, window_ms: int, c_s: float = 0.2, range_id: int = 5):

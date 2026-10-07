@@ -161,3 +161,49 @@ def test_effective_reply_wait_matches_the_actual_device_window(make_meter, monke
     result = meter.synchronized_effective(period_s=3.17, pretrigger_ms=100, window_ms=600)
     assert result.window_ms == 600
     assert result.e_effective_lx == 4.0
+
+
+def test_rejected_sn1_can_use_only_the_confirmed_required_integration(make_meter):
+    meter = make_meter(SN1=b'?1\n', SS0=b'?1\n', GS7=b'60\n')
+    meter.configure_flash_detection(range_id=5)
+    assert meter.serial.sent == ['SB0', 'SR5', 'SN1', 'GS3', 'SS0', 'GS7', 'GR', 'GS0', 'GS3']
+
+
+@pytest.mark.parametrize('reply', [b'1000\n', b'0\n', b'1.5\n', b'nan\n',
+                                   b'inf\n', b'?1\n', b'', b'invalid 1\n'])
+def test_rejected_sn1_with_wrong_or_unknown_integration_blocks_flash_acquisition(make_meter, reply):
+    meter = make_meter(SN1=b'?1\n', GS3=reply)
+    with pytest.raises(P9710Error, match='CW integration|GS3 returned') as error:
+        meter.synchronized_effective(period_s=3.17, pretrigger_ms=100, window_ms=600)
+    assert 'Remote RS232' in str(error.value)
+    assert '0.1 ms' in str(error.value)
+    assert meter.serial.sent == ['SB0', 'SR5', 'SN1', 'GS3']
+
+
+@pytest.mark.parametrize('reply', [b'?2\n', b'?16\n', b'*\n'])
+def test_other_integration_command_errors_are_not_bypassed(make_meter, reply):
+    meter = make_meter(SN1=reply)
+    with pytest.raises(P9710Error, match='SN1'):
+        meter.configure_flash_detection()
+    assert 'GS3' not in meter.serial.sent
+
+
+def test_flash_setup_checks_integration_even_after_an_accepted_setter(make_meter):
+    meter = make_meter(GS3=b'1000\n')
+    with pytest.raises(P9710Error, match='configuration mismatch: GS3'):
+        meter.synchronized_effective(period_s=3.17, pretrigger_ms=100, window_ms=600)
+    assert 'MV' not in meter.serial.sent
+    assert 'MI' not in meter.serial.sent
+
+
+def test_full_effective_path_with_rejected_sn1_and_confirmed_readback(make_meter, monkeypatch):
+    meter = make_meter(SN1=b'?1\n', SS0=b'?1\n', GS7=b'60\n',
+                       MV=b'8\n', MI=b'4\n', GP=b'20\n')
+    monkeypatch.setattr(meter, '_wait_until', lambda target: None)
+    reading = meter.synchronized_effective(period_s=3.17, pretrigger_ms=100, window_ms=600)
+    assert reading.e_effective_lx == 4.0
+    assert reading.trigger_sample_lx == 8.0
+    assert reading.range_utilization_pct == 20.0
+    assert meter.serial.sent == ['SB0', 'SR5', 'SN1', 'GS3', 'SS0', 'GS7',
+                                'GR', 'GS0', 'GS3', 'MV', 'SB0', 'SR5',
+                                'SU0.2', 'SM60', 'SZ0', 'MI', 'GP']
