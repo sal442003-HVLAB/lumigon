@@ -249,6 +249,7 @@ def test_cw_can_read_again_after_effective_fast_integration_is_rejected(workspac
     monkeypatch.setattr(modes, 'EffectiveWorker', SynchronousEffective)
     errors = []
     monkeypatch.setattr(modes.QMessageBox, 'critical', lambda *args: errors.append(args[-1]))
+    monkeypatch.setattr(modes, '_show_effective_error', lambda parent, message, details: errors.append(message))
     workspace.p9710_meter_holder['meter'] = meter
     cw_page = workspace.p9710_mode_stack.widget(0)
     integration = next(s for s in cw_page.findChildren(modes.QDoubleSpinBox) if s.suffix() == ' ms')
@@ -260,6 +261,8 @@ def test_cw_can_read_again_after_effective_fast_integration_is_rejected(workspac
     effective_page = workspace.p9710_mode_stack.widget(6)
     next(b for b in effective_page.findChildren(QPushButton) if b.text() == 'Measure synchronized').click()
     assert len(errors) == 1 and 'GS3 returned' in errors[0]
+    assert "SN1 -> '?1'" in workspace.p9710_last_effective_diagnostics
+    assert "GS3 -> '1000'" in workspace.p9710_last_effective_diagnostics
     assert 'MI' not in meter.serial.sent
     assert workspace.p9710_mode_worker_holder['worker'] is None
     workspace.p9710_mode_combo.setCurrentIndex(0)

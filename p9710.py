@@ -12,7 +12,9 @@ from __future__ import annotations
 import math
 import re
 import statistics
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 
 import serial
@@ -74,8 +76,12 @@ class P9710:
         self.version = None
         self.unit = None
         self.trace_callback = None
+        self._io_lock = threading.RLock()
+        self._reply_pending = False
+        self.recent_replies = deque(maxlen=16)
 
     def _trace_reply(self, command, raw, started, finished):
+        self.recent_replies.append((str(command), raw, started, finished))
         if self.trace_callback is not None:
             self.trace_callback(str(command), raw, started, finished)
 
@@ -99,6 +105,7 @@ class P9710:
 
     def connect(self, attempts: int = 3, retry_delay_s: float = 0.25) -> str:
         self.disconnect()
+        self.recent_replies.clear()
         self.version = None
         self.unit = None
         attempts = max(1, int(attempts))
@@ -124,52 +131,62 @@ class P9710:
     def disconnect(self):
         ser = self.serial
         self.serial = None
+        self._reply_pending = False
         if ser is not None:
             try:
                 ser.close()
             except Exception:
                 pass
 
+    def _exchange(self, command: str, wait_s: float, timeout_s: float | None = None) -> str:
+        # Each LF-terminated command has an LF-terminated response, including
+        # a bare LF for a successful setter (manual §15.1 and §15.4).
+        # A short timeout must not be mistaken for that acknowledgement.
+        with self._io_lock:
+            if not self.is_connected:
+                raise P9710Error("P-9710 is not connected.")
+            if self._reply_pending:
+                raise P9710Error(
+                    "P-9710 response framing is uncertain after a timed-out transaction. "
+                    "Wait for the meter to finish, then disconnect and reconnect before retrying."
+                )
+            ser = self.serial
+            old_timeout = ser.timeout
+            started = time.perf_counter()
+            ser.timeout = self.timeout_s if timeout_s is None else float(timeout_s)
+            try:
+                ser.reset_input_buffer()
+                ser.write((str(command).strip() + "\n").encode("ascii"))
+                ser.flush()
+                if wait_s > 0:
+                    time.sleep(wait_s)
+                reply = ser.readline()
+            except (serial.SerialException, OSError):
+                self._reply_pending = True
+                self._trace_reply(command, "<SERIAL READ/WRITE ERROR>", started, time.perf_counter())
+                raise
+            finally:
+                ser.timeout = old_timeout
+            raw = reply.decode("ascii", errors="replace").strip()
+            if not reply.endswith(b"\n"):
+                self._reply_pending = True
+                self._trace_reply(command, "<NO RESPONSE>" if not reply else f"<INCOMPLETE> {raw}",
+                                  started, time.perf_counter())
+                detail = (f"No response to {command!r}." if not reply else
+                          f"Incomplete response to {command!r}: {raw!r}.")
+                raise P9710Error(detail + " No complete LF acknowledgement received. "
+                                 "Wait for the meter to finish, then disconnect and reconnect.")
+            self._trace_reply(command, raw, started, time.perf_counter())
+            return raw
+
     def query(self, command: str, wait_s: float = 0.01, timeout_s: float | None = None) -> str:
-        if not self.is_connected:
-            raise P9710Error("P-9710 is not connected.")
-        ser = self.serial
-        old_timeout = ser.timeout
-        started = time.perf_counter()
-        if timeout_s is not None:
-            ser.timeout = float(timeout_s)
-        try:
-            ser.reset_input_buffer()
-            ser.write((str(command).strip() + "\n").encode("ascii"))
-            ser.flush()
-            if wait_s > 0:
-                time.sleep(wait_s)
-            raw = ser.readline().decode("ascii", errors="replace").strip()
-        finally:
-            ser.timeout = old_timeout
+        raw = self._exchange(command, wait_s, timeout_s)
         if not raw:
-            self._trace_reply(command, "<NO RESPONSE>", started, time.perf_counter())
             raise P9710Error(f"No response to {command!r}.")
-        self._trace_reply(command, raw, started, time.perf_counter())
         return raw
 
     def command(self, command: str, wait_s: float = 0.02):
-        if not self.is_connected:
-            raise P9710Error("P-9710 is not connected.")
-        ser = self.serial
-        started = time.perf_counter()
-        ser.reset_input_buffer()
-        ser.write((str(command).strip() + "\n").encode("ascii"))
-        ser.flush()
-        if wait_s > 0:
-            time.sleep(wait_s)
-        old_timeout = ser.timeout
-        ser.timeout = 0.05
-        try:
-            raw = ser.readline().decode("ascii", errors="replace").strip()
-        finally:
-            ser.timeout = old_timeout
-        self._trace_reply(command, raw, started, time.perf_counter())
+        raw = self._exchange(command, wait_s)
         if raw.startswith("?") or raw == "*":
             raise P9710CommandError(command, raw)
 
@@ -211,8 +228,8 @@ class P9710:
             if exc.reply != "?1":
                 raise
             guidance = (
-                "Stop any front-panel measurement, select Mode / Remote RS232, "
-                f"and set the meter's CW integration time to {integration_ticks / 10:g} ms. "
+                "Stop any front-panel measurement and verify the meter's CW "
+                f"integration time is {integration_ticks / 10:g} ms. "
                 "Acquisition rejected until the required setting is confirmed."
             )
             try:

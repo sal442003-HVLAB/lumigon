@@ -175,7 +175,7 @@ def test_rejected_sn1_with_wrong_or_unknown_integration_blocks_flash_acquisition
     meter = make_meter(SN1=b'?1\n', GS3=reply)
     with pytest.raises(P9710Error, match='CW integration|GS3 returned') as error:
         meter.synchronized_effective(period_s=3.17, pretrigger_ms=100, window_ms=600)
-    assert 'Remote RS232' in str(error.value)
+    assert "verify the meter's CW" in str(error.value)
     assert '0.1 ms' in str(error.value)
     assert meter.serial.sent == ['SB0', 'SR5', 'SN1', 'GS3']
 
@@ -207,3 +207,80 @@ def test_full_effective_path_with_rejected_sn1_and_confirmed_readback(make_meter
     assert meter.serial.sent == ['SB0', 'SR5', 'SN1', 'GS3', 'SS0', 'GS7',
                                 'GR', 'GS0', 'GS3', 'MV', 'SB0', 'SR5',
                                 'SU0.2', 'SM60', 'SZ0', 'MI', 'GP']
+
+
+@pytest.mark.parametrize('command', ['SS0', 'SN1', 'SU0.2', 'SM60'])
+def test_setters_wait_for_delayed_complete_acknowledgements(make_meter, command):
+    meter = make_meter()
+    class DelayedSerial(ReplySerial):
+        def readline(self):
+            # Model a device reply arriving after 200 ms. The previous 50 ms
+            # command timeout returned b'', which was accepted as success.
+            assert self.timeout == 3.0
+            return b'\n' if self.timeout >= .2 else b''
+    meter.serial = DelayedSerial({})
+    meter.command(command)
+    assert meter.serial.sent == [command]
+    assert meter.serial.timeout == 3.0
+
+
+def test_delayed_rejection_stays_with_its_own_command_not_the_next_setter(make_meter):
+    meter = make_meter()
+    class DelayedErrorSerial(ReplySerial):
+        def readline(self):
+            return b'?1\n' if self.timeout >= .2 else b''
+    meter.serial = DelayedErrorSerial({})
+    with pytest.raises(p9710.P9710CommandError) as error:
+        meter.configure_effective(window_ms=600)
+    assert error.value.command == 'SB0'
+    assert meter.serial.sent == ['SB0']
+
+
+@pytest.mark.parametrize('reply', [b'', b'?1', b'\r'])
+def test_absent_or_partial_setter_reply_is_never_an_ack_and_blocks_next_send(make_meter, reply):
+    meter = make_meter(**{'SU0.2': reply})
+    with pytest.raises(P9710Error, match='LF acknowledgement'):
+        meter.configure_effective(window_ms=600)
+    assert meter.serial.sent == ['SB0', 'SR5', 'SU0.2']
+    with pytest.raises(P9710Error, match='disconnect and reconnect'):
+        meter.command('SM60')
+    assert meter.serial.sent == ['SB0', 'SR5', 'SU0.2']
+    assert meter.serial.timeout == 3.0
+
+
+@pytest.mark.parametrize('reply', [b'\n', b'\r\n', b'#\n'])
+def test_complete_empty_or_hash_ack_is_accepted(make_meter, reply):
+    meter = make_meter(**{'SU0.2': reply})
+    meter.command('SU0.2')
+    meter.command('SM60')
+    assert meter.serial.sent == ['SU0.2', 'SM60']
+
+
+@pytest.mark.parametrize('command', ['SU0.2', 'SM60'])
+def test_genuine_effective_setting_rejection_still_blocks_mi(make_meter, command):
+    meter = make_meter(**{command: b'?1\n'})
+    with pytest.raises(p9710.P9710CommandError) as error:
+        meter.configure_effective(window_ms=600)
+    assert error.value.command == command
+    assert 'MI' not in meter.serial.sent
+
+
+def test_partial_query_cannot_be_used_as_a_measurement_or_shift_to_gp(make_meter):
+    meter = make_meter(MV=b'12.34')
+    with pytest.raises(P9710Error, match='LF acknowledgement'):
+        meter.read_mv(attempts=1)
+    with pytest.raises(P9710Error, match='framing is uncertain'):
+        meter.read_range_utilization()
+    assert meter.serial.sent == ['MV']
+
+
+def test_query_uses_its_requested_timeout_and_restores_serial_timeout(make_meter):
+    meter = make_meter(MI=b'4.0\n')
+    meter.serial.timeout = 1.5
+    original = meter.serial.readline
+    def readline():
+        assert meter.serial.timeout == 2.6
+        return original()
+    meter.serial.readline = readline
+    assert meter.query('MI', timeout_s=2.6) == '4.0'
+    assert meter.serial.timeout == 1.5

@@ -163,6 +163,16 @@ class EffectiveWorker(QThread):
             self.failed.emit(str(exc))
 
 
+def _show_effective_error(parent, message, details):
+    dialog = QMessageBox(parent)
+    dialog.setIcon(QMessageBox.Icon.Critical)
+    dialog.setWindowTitle("P-9710 I-Effective (SC)")
+    dialog.setText(message)
+    if details:
+        dialog.setDetailedText(details)
+    dialog.exec()
+
+
 def attach_p9710_mode_workspace(window):
     if getattr(window, "p9710_effective_box", None) is not None:
         return window.p9710_effective_box
@@ -531,7 +541,18 @@ def attach_p9710_mode_workspace(window):
         e_gp_text.setText("Range use: unavailable after read error")
         e_status.setText("Measurement failed")
         e_status.setStyleSheet("color:#FF7675; font-weight:700;")
-        QMessageBox.critical(window, "P-9710 I-Effective (SC)", message)
+        meter = meter_holder["meter"]
+        replies = getattr(meter, "recent_replies", ())
+        details = "\n".join(
+            f"{command} -> {raw!r} ({(finished - started) * 1000:.1f} ms)"
+            for command, raw, started, finished in replies
+        )
+        if details:
+            details = (f"Device: {getattr(meter, 'version', None) or 'unknown'}\n"
+                       "Recent command/reply transactions (empty reply = LF acknowledgement):\n"
+                       + details)
+        window.p9710_last_effective_diagnostics = details
+        _show_effective_error(window, message, details)
 
     def effective_completed(reading):
         distance_m = distance_spin.value()

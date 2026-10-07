@@ -54,8 +54,8 @@ finite and exactly matches the requested tick count. In particular, `GS3=1`
 permits `SN1: ?1` to proceed; `GS3=1000` means 100 ms and must block the flash
 measurement. Unknown, malformed, missing or error replies also block it.
 The error reports the returned and required settings and asks the operator
-to stop any front-panel measurement, select Mode / Remote RS232, and set the
-required CW integration. No slower integration or altered threshold is
+to stop any front-panel measurement and verify the required CW integration.
+No slower integration or altered threshold is
 silently substituted. Other setter error codes retain their original failure.
 
 Flash detection now verifies range, autorange and integration even when the
@@ -83,3 +83,34 @@ Each new attempt clears old E-effective, I-effective, trigger, cached results
 and GP utilization. The bar resets to zero with `Unavailable`, so a previous
 percentage cannot appear to describe the new attempt. A manually entered
 period remains available for repeated measurements in the same session.
+
+## Complete serial acknowledgements
+
+The next screenshot identified `SM60: ?1`. The operator then reported
+`SU0.2: ?1` on another attempt while all CW/peak modes worked, and said the
+Remote RS232 mode did not connect. The changing error command is not proof
+of a firmware limitation, nor proof of response misattribution. We no longer
+present switching to Remote RS232 as the solution on this particular meter.
+
+A definite transport defect was found: setters reduced the read timeout to
+50 ms and treated both `b''` (no bytes received) and `b'\n'` (successful LF
+acknowledgement) as success. A delayed response could consequently be lost
+by the next input-buffer reset or consumed under the next command's name.
+The manufacturer's V4.7 manual §15.1/§15.4 documents an LF terminator for
+each command response, including successful setters with no numeric payload.
+
+Setters now use the configured response timeout (normally 3 seconds), and
+both setters and queries require a complete LF-terminated response. Serial
+exchanges are protected by a lock. A missing or incomplete frame blocks any
+subsequent command until disconnect/reconnect, preventing a late packet from
+being treated as the next command's response. A bare LF remains a valid
+setter acknowledgement. Actual `?1` errors still fail; `SU` and `SM` are
+never silently bypassed or replaced with a software intensity calculation.
+
+Effective error dialogs now offer Show Details with the last 16 literal
+command/reply pairs and transaction durations. Missing and incomplete frames
+have explicit markers; complete empty acknowledgements appear as `''`.
+Simulated tests cover delayed acknowledgements/rejections, absent/partial
+frames, subsequent-send blocking, MI timeout preservation, genuine SU/SM
+rejection and the diagnostic content. This corrects a verified code defect;
+it does not yet establish the reason for the observed hardware rejection.
