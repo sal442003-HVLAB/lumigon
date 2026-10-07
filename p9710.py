@@ -218,7 +218,11 @@ class P9710:
                     f"{readback_error}. Stop the meter's running measurement and "
                     "set Setup / Synchronisation to Not active before retrying."
                 ) from exc
-            if not math.isfinite(flags) or flags != 0:
+            # GS7 is an 8-bit flag field, not a Boolean. Manual §15.3.9
+            # identifies bit 1 (mask 0x02) as synchronization active.
+            # Other set bits must not block an otherwise valid CW read.
+            valid_flags = math.isfinite(flags) and flags.is_integer() and 0 <= flags <= 255
+            if not valid_flags or int(flags) & 0x02:
                 raise P9710Error(
                     f"{exc}. GS7 returned {flags:g}; Synchronisation OFF is not "
                     "confirmed. Set Setup / Synchronisation to Not active before retrying."

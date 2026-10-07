@@ -7,9 +7,13 @@ The operator's 2026-10-07 screenshot identifies firmware `P9710 V4.4` and
 limitation from a device state that disallows the command.
 
 CW configuration still sends the requested `SS0`/`SS1`. If and only if `SS0`
-returns `?1`, the driver queries `GS7`. It continues only for an exact numeric
-zero, proving all flags including synchronization are off. Unknown, nonzero,
-missing or error replies reject the acquisition with an actionable message.
+returns `?1`, the driver queries `GS7`. This is an 8-bit flag field; only bit 1
+(mask `0x02`, manual §15.3.9) indicates synchronization active. The initial
+fallback incorrectly required the whole field to be zero. The operator's next
+screenshot returned 60 (`00111100`), which has synchronization disabled despite
+other flags being set. The fallback now checks only that bit, after validating
+an integer flag value in 0..255. Active synchronization, invalid, missing or
+error replies reject the acquisition with an actionable message.
 Other command errors are never ignored. No substitute calibration/wavelength
 command is sent. Existing Measurement range/auto/integration readbacks remain.
 

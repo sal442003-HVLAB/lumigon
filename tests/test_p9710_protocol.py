@@ -82,17 +82,30 @@ def test_missing_gp_is_logged_and_rejected(make_meter):
     assert trace[0][:2] == ('GP', '<NO RESPONSE>')
 
 
-def test_rejected_ss0_is_allowed_only_when_readback_proves_sync_already_off(make_meter):
-    meter = make_meter(SS0=b'?1\n', GS7=b'0\n')
+@pytest.mark.parametrize('flags', [0, 1, 4, 60, 128, 253])
+def test_rejected_ss0_is_allowed_only_when_readback_proves_sync_already_off(make_meter, flags):
+    meter = make_meter(SS0=b'?1\n', GS7=f'{flags}\n'.encode())
     meter.configure_cw(integration_ms=.1, range_id=5, verify=True)
     assert meter.serial.sent == ['SB0', 'SR5', 'SN1', 'SS0', 'GS7', 'GR', 'GS0', 'GS3']
 
 
-@pytest.mark.parametrize('reply', [b'1\n', b'2\n', b'?1\n', b'', b'nan\n'])
+@pytest.mark.parametrize('reply', [b'2\n', b'3\n', b'62\n', b'255\n',
+                                   b'-1\n', b'256\n', b'60.5\n', b'?1\n', b'', b'nan\n'])
 def test_rejected_ss0_must_not_be_ignored_with_unknown_or_active_sync(make_meter, reply):
     meter = make_meter(SS0=b'?1\n', GS7=reply)
     with pytest.raises(P9710Error, match='Synchronisation OFF'):
         meter.configure_cw(integration_ms=.1, range_id=5)
+
+
+def test_reported_gs7_60_allows_repeated_cw_snapshots(make_meter):
+    meter = make_meter(SS0=b'?1\n', GS7=b'60\n', MV=b'12.3456\n',
+                       GA=b'24\n', GB=b'0\n', GD=b'24\n', GP=b'20\n')
+    for _ in range(3):
+        reading = meter.read_cw_snapshot(integration_ms=.1, range_id=5, sync_enabled=False)
+        assert reading.cw_lx == 12.3456
+        assert reading.range_utilization_pct == 20.0
+        assert reading.sync_enabled is False
+    assert meter.serial.sent.count('MV') == 3
 
 
 def test_other_ss_errors_and_enabling_sync_are_never_silently_ignored(make_meter):

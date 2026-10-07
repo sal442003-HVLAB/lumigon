@@ -155,3 +155,32 @@ def test_disconnected_continuous_attempt_warns_once_and_stops(workspace, monkeyp
     next(b for b in page.findChildren(QPushButton) if b.text() == 'Start continuous').click()
     assert len(dialogs) == 1
     assert not any(timer.isActive() for timer in workspace.p9710_continuous_timers)
+
+
+def test_continuous_keeps_polling_with_the_reported_gs7_60(workspace, monkeypatch):
+    from PySide6.QtTest import QTest
+    import p9710
+    from test_p9710_protocol import ReplySerial
+
+    monkeypatch.setattr(p9710.time, 'sleep', lambda seconds: None)
+    meter = p9710.P9710('SIMULATED')
+    meter.serial = ReplySerial({'SS0': b'?1\n', 'GS7': b'60\n', 'MV': b'12.3456\n',
+                                'GA': b'24\n', 'GB': b'0\n', 'GD': b'24\n', 'GP': b'20\n'})
+    class SnapshotWorker(ImmediateWorker):
+        def __init__(self, meter, settings, parent=None):
+            QObject.__init__(self, parent)
+            self.reading = meter.read_cw_snapshot(**settings)
+    monkeypatch.setattr(modes, 'CWWorker', SnapshotWorker)
+    errors = []
+    monkeypatch.setattr(modes.QMessageBox, 'critical', lambda *args: errors.append(args))
+    workspace.p9710_meter_holder['meter'] = meter
+    page = workspace.p9710_mode_stack.widget(0)
+    interval = next(s for s in page.findChildren(modes.QDoubleSpinBox) if s.suffix() == ' s')
+    interval.setValue(.05)
+    next(b for b in page.findChildren(QPushButton) if b.text() == 'Start continuous').click()
+    QTest.qWait(180)
+    assert workspace.p9710_continuous_timers[0].isActive()
+    assert meter.serial.sent.count('MV') >= 3
+    assert not errors
+    assert workspace.p9710_last_cw_reading.cw_lx == 12.3456
+    workspace.p9710_stop_continuous()
