@@ -91,8 +91,8 @@ def _build_axis_profile_box(window, axis, speed_default, ramp_default, scurve_de
     layout.addWidget(ramp, 1, 1)
     layout.addWidget(QLabel("S-curve:"), 2, 0)
     layout.addWidget(scurve, 2, 1)
-    layout.addWidget(apply_button, 3, 0, 1, 2)
-    layout.addWidget(status, 4, 0, 1, 2)
+    layout.addWidget(apply_button, 4, 0, 1, 2)
+    layout.addWidget(status, 5, 0, 1, 2)
     limit_spin = add_axis_limit_control(window, axis, layout)
     setattr(window, f"{axis.name.lower()}_limit_spin", limit_spin)
 

@@ -80,7 +80,7 @@ def test_controls_sync_both_manual_and_scan_bounds_without_layout_changes(window
     for prefix, limit in (("gamma", 75.0), ("c", 120.0)):
         spin = getattr(window, f"{prefix}_limit_spin")
         box = getattr(window, f"{prefix}_profile_box")
-        assert box.layout().getItemPosition(box.layout().indexOf(spin)) == (5, 1, 1, 1)
+        assert box.layout().getItemPosition(box.layout().indexOf(spin)) == (3, 1, 1, 1)
         assert box.layout().horizontalSpacing() == 8
         assert box.layout().verticalSpacing() == 7
         spin.setValue(limit)

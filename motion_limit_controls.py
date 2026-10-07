@@ -23,7 +23,7 @@ def apply_axis_limits_to_controls(window):
     envelope = window.findChild(QLabel, "measurementEnvelope")
     if envelope is not None:
         envelope.setText(
-            f"Current software limits: Gamma ±{window.motion.axis_limit_deg(GAMMA):g}°  •  "
+            f"Current travel limits: Gamma ±{window.motion.axis_limit_deg(GAMMA):g}°  •  "
             f"C ±{window.motion.axis_limit_deg(C_AXIS):g}°"
         )
 
@@ -39,11 +39,14 @@ def add_axis_limit_control(window, axis, layout):
     limit_spin.setKeyboardTracking(False)
     limit_spin.setValue(window.motion.axis_limit_deg(axis))
     limit_spin.setToolTip(
-        "Symmetric software limit around Session Zero for this session. "
+        "Symmetric travel limit around Session Zero for this session. "
         "Press Enter or leave the field to apply."
     )
-    layout.addWidget(QLabel("Software limit (±):"), 5, 0)
-    layout.addWidget(limit_spin, 5, 1)
+    limit_label = QLabel("Travel limit (±):")
+    limit_label.setStyleSheet("color: #FF7675;")
+    limit_spin.setStyleSheet("QDoubleSpinBox, QLineEdit { color: #FF7675; }")
+    layout.addWidget(limit_label, 3, 0)
+    layout.addWidget(limit_spin, 3, 1)
 
     def commit_limit():
         previous = window.motion.axis_limit_deg(axis)
@@ -67,7 +70,7 @@ def add_axis_limit_control(window, axis, layout):
             apply_axis_limits_to_controls(window)
         except Exception as exc:
             limit_spin.setValue(previous)
-            QMessageBox.warning(window, "Software Limit", str(exc))
+            QMessageBox.warning(window, "Travel Limit", str(exc))
 
     limit_spin.editingFinished.connect(commit_limit)
     return limit_spin
