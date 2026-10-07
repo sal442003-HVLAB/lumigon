@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
 )
 from serial.tools import list_ports
@@ -152,7 +153,7 @@ def attach_luxmeter_controls(window):
     lux_label = QLabel("Lux: —")
     stability_label = QLabel("Std. dev.: —")
 
-    from luxmeter_ui import form_section, result_section, two_columns
+    from luxmeter_ui import form_section, result_section
     root = QVBoxLayout(box)
     root.setContentsMargins(10, 10, 10, 10)
     root.setSpacing(16)
@@ -162,14 +163,17 @@ def attach_luxmeter_controls(window):
     connection_grid.setSpacing(12)
     connection_grid.addWidget(QLabel("Instrument:"), 0, 0)
     connection_grid.addWidget(instrument_combo, 0, 1, 1, 3)
-    connection_grid.addWidget(status_label, 0, 4)
     connection_grid.addWidget(QLabel("Port:"), 1, 0)
-    connection_grid.addWidget(port_combo, 1, 1)
-    connection_grid.addWidget(refresh_ports_button, 1, 2)
-    connection_grid.addWidget(connect_button, 1, 3)
-    connection_grid.addWidget(disconnect_button, 1, 4)
+    connection_grid.addWidget(port_combo, 1, 1, 1, 2)
+    connection_grid.addWidget(refresh_ports_button, 1, 3)
+    connection_actions = QHBoxLayout()
+    connection_actions.setSpacing(12)
+    connection_actions.addWidget(connect_button)
+    connection_actions.addWidget(disconnect_button)
+    connection_actions.addStretch(1)
+    connection_actions.addWidget(status_label)
+    connection_grid.addLayout(connection_actions, 2, 0, 1, 4)
     connection_grid.setColumnStretch(1, 1)
-    root.addWidget(connection)
     settings = form_section("Measurement settings", [
         ("Sensitivity:", sensitivity_spin), ("Samples:", samples_spin),
         ("Integration:", integration_spin), ("Poll interval:", live_interval_spin),
@@ -182,7 +186,17 @@ def attach_luxmeter_controls(window):
     lux_label.setStyleSheet("font-size:22pt; font-weight:700; color:#55EFC4;")
     results = result_section("Illuminance", lux_label, current_label, stability_label,
                              live_status_label, id_label)
-    root.addWidget(two_columns(settings, results))
+    columns = QGridLayout()
+    columns.setContentsMargins(0, 0, 0, 0)
+    columns.setSpacing(16)
+    columns.setColumnStretch(0, 1)
+    columns.setColumnStretch(1, 1)
+    for section in (connection, settings, results):
+        section.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+    columns.addWidget(connection, 0, 0)
+    columns.addWidget(settings, 1, 0)
+    columns.addWidget(results, 0, 1, 2, 1)
+    root.addLayout(columns)
 
     def _repolish(label):
         label.style().unpolish(label)
