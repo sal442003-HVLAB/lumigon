@@ -250,7 +250,7 @@ def attach_motor_control_refinement(window):
             window.connection_label.setToolTip(
                 ("VIRTUAL HARDWARE. " if VIRTUAL_HARDWARE else "")
                 + "Connected. Default motion profile verified on both axes: "
-                "5.0 rpm / Ramp 300 ms / S-curve 2000 ms."
+                "10.0 rpm / Ramp 300 ms / S-curve 2000 ms."
             )
 
             for control, value in (
@@ -371,7 +371,7 @@ def attach_motor_control_refinement(window):
                         control.setValue(decode(readback))
                         if status is not None:
                             status.setText(
-                                f"{label} verified: {control.text()} — Enter to commit edits"
+                                f"{label} verified: {control.text()}"
                             )
                     except Exception as exc:
                         if previous_raw is not None:

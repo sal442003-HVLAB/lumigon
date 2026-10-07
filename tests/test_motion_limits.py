@@ -7,7 +7,7 @@ import pytest
 from PySide6.QtWidgets import QApplication, QLabel
 
 from axis_profile_controls import attach_axis_profile_controls
-from machine_config import P6_03
+from machine_config import P6_03, P5_60, P5_20, P1_36
 from main_window import MainWindow
 from motion_controller import C_AXIS, GAMMA, MotionController
 from motion_limit_controls import apply_axis_limits_to_controls
@@ -166,3 +166,27 @@ def test_measurement_precheck_uses_selected_controller_limit(window, monkeypatch
     window.measurement_v2_start_button.click()
     assert warnings == ["Stop test before acquisition"]
     assert calls[0][1] == 95
+
+
+@pytest.mark.parametrize("axis,prefix", [(GAMMA, "gamma"), (C_AXIS, "c")])
+@pytest.mark.parametrize("speed", [10.0, 50.0])
+def test_speed_defaults_and_enter_commit_use_verified_drive_value(window, axis, prefix, speed):
+    control = getattr(window, f"{prefix}_speed_spin")
+    assert control.value() == 10.0
+    assert control.maximum() == 50.0
+    assert window.motion.expected_speed_raw(axis) == 100
+    registers = {P5_60: 100, P5_20: 300, P1_36: 2000}
+    writes = []
+    def write(slave, register, value):
+        assert slave == axis.slave_id
+        writes.append((register, value))
+        registers[register] = value
+    window.modbus = SimpleNamespace(
+        is_connected=True, disconnect=lambda: None,
+        read_u16=lambda slave, register: registers[register], write_u16=write,
+    )
+    control.setValue(speed)
+    control.lineEdit().returnPressed.emit()
+    assert writes == [(P5_60, round(speed * 10))]
+    assert window.motion.expected_speed_raw(axis) == round(speed * 10)
+    assert getattr(window, f"{prefix}_profile_status_label").text() == f"Speed verified: {control.text()}"

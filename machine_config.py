@@ -46,20 +46,20 @@ PROFILE_MAX_MS = 3000
 PROFILE_STEP_MS = 100
 
 # Keep manual/commissioning motion inside a practical operator range. 3 rpm is
-# the slowest allowed value to avoid accidental extremely long moves; 30 rpm is
+# the slowest allowed value to avoid accidental extremely long moves; 50 rpm is
 # the current HMI ceiling. The operator can still choose the normal 15-20 rpm
 # working range as required.
 SPEED_MIN_RPM = 3.0
-SPEED_MAX_RPM = 30.0
+SPEED_MAX_RPM = 50.0
 SPEED_STEP_RPM = 0.5
 
 # Gamma baseline selected for normal commissioning use.
-GAMMA_SPEED_DEFAULT_RPM = 5.0
+GAMMA_SPEED_DEFAULT_RPM = 10.0
 GAMMA_RAMP_DEFAULT_MS = 300
 GAMMA_SCURVE_DEFAULT_MS = 2000
 
-# C baseline selected during commissioning on 2026-08-23.
-C_SPEED_DEFAULT_RPM = 5.0
+# C baseline selected by the operator on 2026-10-07.
+C_SPEED_DEFAULT_RPM = 10.0
 C_RAMP_DEFAULT_MS = 300
 C_SCURVE_DEFAULT_MS = 2000
 
