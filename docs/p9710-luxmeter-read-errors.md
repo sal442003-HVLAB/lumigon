@@ -66,3 +66,20 @@ readback, and prove that no `MV` or `MI` is issued with a mismatched setting.
 Hardware resolution still requires an operator retry and, if blocked, the
 new GS3 readback from the error. This is a verified-state fallback, not proof
 that V4.4 always accepts remote integration changes.
+
+## Explicit pulse period and fresh results
+
+The operator subsequently confirmed that CW works when attempted first, while
+Effective still fails. This observation does not identify the new command or
+GS3 readback; it must not be treated as proof of firmware support or a solved
+Effective acquisition. A UI regression models working CW at 100 ms, rejected
+Effective setup at 0.1 ms, and a successful return to CW continuous reading.
+It checks that the worker is released and only one error dialog is emitted.
+
+The Effective pulse-period field now starts at zero, including after
+connection/disconnection, instead of retaining a laboratory example of
+3.170 s. The operator must enter at least 0.05 s before a worker can start.
+Each new attempt clears old E-effective, I-effective, trigger, cached results
+and GP utilization. The bar resets to zero with `Unavailable`, so a previous
+percentage cannot appear to describe the new attempt. A manually entered
+period remains available for repeated measurements in the same session.

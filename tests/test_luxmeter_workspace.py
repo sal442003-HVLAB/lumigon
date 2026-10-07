@@ -83,11 +83,53 @@ def test_effective_display_does_not_double_photometric_results(workspace, monkey
         ),
     )
     workspace.p9710_mode_combo.setCurrentIndex(6)
+    workspace.p9710_effective_period_spin.setValue(3.17)
     page = workspace.p9710_mode_stack.widget(6)
     next(b for b in page.findChildren(QPushButton) if b.text() == "Measure synchronized").click()
     assert workspace.p9710_last_e_effective_lx == 4.0
     assert workspace.p9710_last_i_effective_cd == 100.0  # 4 lx × (5 m)²
     assert "Above limit" in page.findChild(QProgressBar).format()
+
+
+def test_effective_requires_manually_entered_period_before_any_read(workspace, monkeypatch):
+    assert workspace.p9710_effective_period_spin.value() == 0.0
+    def unexpected_worker(*args, **kwargs):
+        pytest.fail('No device worker may start without a pulse period')
+    monkeypatch.setattr(modes, 'EffectiveWorker', unexpected_worker)
+    warnings = []
+    monkeypatch.setattr(modes.QMessageBox, 'warning', lambda *args: warnings.append(args[-1]))
+    workspace.p9710_meter_holder['meter'] = SimpleNamespace(is_connected=True)
+    workspace.p9710_mode_combo.setCurrentIndex(6)
+    page = workspace.p9710_mode_stack.widget(6)
+    next(b for b in page.findChildren(QPushButton) if b.text() == 'Measure synchronized').click()
+    assert len(warnings) == 1
+    assert 'pulse period' in warnings[0]
+    assert workspace.p9710_mode_worker_holder['worker'] is None
+
+
+def test_new_effective_attempt_clears_old_range_and_results_before_worker(workspace, monkeypatch):
+    page = workspace.p9710_mode_stack.widget(6)
+    bar = page.findChild(QProgressBar)
+    bar.setValue(17)
+    workspace.p9710_last_e_effective_lx = 4.0
+    workspace.p9710_last_i_effective_cd = 100.0
+    workspace.p9710_last_reading = object()
+    workspace.p9710_effective_period_spin.setValue(3.17)
+    class WaitingWorker(ImmediateWorker):
+        def start(self):
+            assert bar.value() == 0
+            assert bar.format() == 'Unavailable'
+            assert workspace.p9710_last_e_effective_lx is None
+            assert workspace.p9710_last_i_effective_cd is None
+            assert workspace.p9710_last_reading is None
+            assert any(label.text() == 'E-effective: —' for label in page.findChildren(QLabel))
+            self.finished.emit()
+    monkeypatch.setattr(modes, 'EffectiveWorker', WaitingWorker)
+    workspace.p9710_meter_holder['meter'] = SimpleNamespace(is_connected=True, reading=None)
+    workspace.p9710_mode_combo.setCurrentIndex(6)
+    next(b for b in page.findChildren(QPushButton) if b.text() == 'Measure synchronized').click()
+    assert workspace.p9710_mode_worker_holder['worker'] is None
+    assert workspace.p9710_effective_period_spin.value() == 3.17
 
 
 def test_instrument_scroll_is_independent_and_wheel_does_not_change_range(workspace, app):
@@ -183,4 +225,47 @@ def test_continuous_keeps_polling_with_the_reported_gs7_60(workspace, monkeypatc
     assert meter.serial.sent.count('MV') >= 3
     assert not errors
     assert workspace.p9710_last_cw_reading.cw_lx == 12.3456
+    workspace.p9710_stop_continuous()
+
+
+def test_cw_can_read_again_after_effective_fast_integration_is_rejected(workspace, monkeypatch):
+    from PySide6.QtTest import QTest
+    import p9710
+    from test_p9710_protocol import ReplySerial
+
+    monkeypatch.setattr(p9710.time, 'sleep', lambda seconds: None)
+    meter = p9710.P9710('SIMULATED')
+    meter.serial = ReplySerial({'SN1': b'?1\n', 'GS3': b'1000\n',
+                                'MV': b'12.3456\n', 'GP': b'8.5\n'})
+    class SynchronousCW(modes.CWWorker):
+        def start(self):
+            self.run()
+            self.finished.emit()
+    class SynchronousEffective(modes.EffectiveWorker):
+        def start(self):
+            self.run()
+            self.finished.emit()
+    monkeypatch.setattr(modes, 'CWWorker', SynchronousCW)
+    monkeypatch.setattr(modes, 'EffectiveWorker', SynchronousEffective)
+    errors = []
+    monkeypatch.setattr(modes.QMessageBox, 'critical', lambda *args: errors.append(args[-1]))
+    workspace.p9710_meter_holder['meter'] = meter
+    cw_page = workspace.p9710_mode_stack.widget(0)
+    integration = next(s for s in cw_page.findChildren(modes.QDoubleSpinBox) if s.suffix() == ' ms')
+    integration.setValue(100.0)
+    next(b for b in cw_page.findChildren(QPushButton) if b.text() == 'Read CW').click()
+    assert workspace.p9710_last_cw_reading.cw_lx == 12.3456
+    workspace.p9710_mode_combo.setCurrentIndex(6)
+    workspace.p9710_effective_period_spin.setValue(3.17)
+    effective_page = workspace.p9710_mode_stack.widget(6)
+    next(b for b in effective_page.findChildren(QPushButton) if b.text() == 'Measure synchronized').click()
+    assert len(errors) == 1 and 'GS3 returned' in errors[0]
+    assert 'MI' not in meter.serial.sent
+    assert workspace.p9710_mode_worker_holder['worker'] is None
+    workspace.p9710_mode_combo.setCurrentIndex(0)
+    next(b for b in cw_page.findChildren(QPushButton) if b.text() == 'Start continuous').click()
+    QTest.qWait(250)
+    assert workspace.p9710_continuous_timers[0].isActive()
+    assert meter.serial.sent.count('MV') >= 3
+    assert len(errors) == 1
     workspace.p9710_stop_continuous()

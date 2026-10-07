@@ -34,7 +34,7 @@ from luxmeter_ui import CollapsibleSection, form_section, result_section, two_co
 DEFAULT_PORT = "COM7"
 DEFAULT_RANGE = 5
 DEFAULT_INTEGRATION_MS = 100.0
-DEFAULT_PERIOD_S = 3.170
+DEFAULT_PERIOD_S = 0.0
 DEFAULT_PRETRIGGER_MS = 100
 DEFAULT_WINDOW_MS = 600
 DEFAULT_THRESHOLD_LX = 5.0
@@ -250,6 +250,8 @@ def attach_p9710_mode_workspace(window):
             QMessageBox.critical(window, "P-9710 Connection Error", str(exc))
             return
         meter_holder["meter"] = meter
+        period_spin.setValue(DEFAULT_PERIOD_S)
+        clear_effective_results()
         connection_status.setText(f"Connected — {version} — unit {meter.unit or '—'}")
         connection_status.setStyleSheet("color:#55EFC4; font-weight:700;")
 
@@ -258,6 +260,8 @@ def attach_p9710_mode_workspace(window):
         if meter is not None:
             meter.disconnect()
         meter_holder["meter"] = None
+        period_spin.setValue(DEFAULT_PERIOD_S)
+        clear_effective_results()
         connection_status.setText("Disconnected")
         connection_status.setStyleSheet("color:#8FA9B9;")
 
@@ -424,10 +428,11 @@ def attach_p9710_mode_workspace(window):
     egrid.setSpacing(12)
 
     period_spin = QDoubleSpinBox()
-    period_spin.setRange(0.05, 120.0)
+    period_spin.setRange(0.0, 120.0)
     period_spin.setDecimals(4)
     period_spin.setSuffix(" s")
     period_spin.setValue(DEFAULT_PERIOD_S)
+    period_spin.setToolTip("Enter the measured pulse period before starting. Zero means not entered.")
     period_spin.setFixedWidth(140)
 
     pre_spin = QSpinBox()
@@ -506,18 +511,24 @@ def attach_p9710_mode_workspace(window):
         worker_holder["worker"] = None
         e_button.setEnabled(True)
 
-    def effective_failed(message):
-        stop_continuous = getattr(window, "p9710_stop_continuous", None)
-        if callable(stop_continuous):
-            stop_continuous(error_message=message)
+    def clear_effective_results():
         e_result.setText("E-effective: —")
         i_result.setText("I-effective: —")
         trigger_result.setText("Trigger sample: —")
-        e_gp_text.setText("Range use: unavailable after read error")
+        e_gp_text.setText("Range use: —")
         _style_utilization(e_gp_bar, None)
         window.p9710_last_e_effective_lx = None
         window.p9710_last_i_effective_cd = None
         window.p9710_last_reading = None
+        e_status.setText("Ready")
+        e_status.setStyleSheet("color:#8FA9B9;")
+
+    def effective_failed(message):
+        stop_continuous = getattr(window, "p9710_stop_continuous", None)
+        if callable(stop_continuous):
+            stop_continuous(error_message=message)
+        clear_effective_results()
+        e_gp_text.setText("Range use: unavailable after read error")
         e_status.setText("Measurement failed")
         e_status.setStyleSheet("color:#FF7675; font-weight:700;")
         QMessageBox.critical(window, "P-9710 I-Effective (SC)", message)
@@ -537,11 +548,20 @@ def attach_p9710_mode_workspace(window):
         window.p9710_last_reading = reading
 
     def start_effective():
+        if worker_holder["worker"] is not None:
+            return
         stop_continuous = getattr(window, "p9710_stop_continuous", None)
         if callable(stop_continuous):
             stop_continuous()
+        clear_effective_results()
+        if period_spin.value() < 0.05:
+            e_status.setText("Enter pulse period before measuring")
+            e_status.setStyleSheet("color:#D9A441; font-weight:700;")
+            QMessageBox.warning(window, "P-9710 I-Effective (SC)",
+                                "Enter the measured pulse period (at least 0.05 s) before starting.")
+            return
         meter = meter_or_warn()
-        if meter is None or worker_holder["worker"] is not None:
+        if meter is None:
             return
         e_button.setEnabled(False)
         e_status.setText("Waiting for reference flash…")
@@ -588,6 +608,7 @@ def attach_p9710_mode_workspace(window):
     window.p9710_mode_stack = stack
     window.p9710_meter_holder = meter_holder
     window.p9710_mode_worker_holder = worker_holder
+    window.p9710_effective_period_spin = period_spin
     window.p9710_last_cw_reading = None
     window.p9710_last_e_effective_lx = None
     window.p9710_last_i_effective_cd = None
