@@ -84,13 +84,20 @@ def attach_p9710_continuous_runtime(window):
     timers = []
     controls = []
 
-    def stop_all():
+    def stop_all(error_message=None):
         for timer, start_button, stop_button, status in controls:
+            was_running = timer.isActive()
             timer.stop()
             start_button.setEnabled(True)
             stop_button.setEnabled(False)
-            status.setText("Continuous: stopped")
-            status.setStyleSheet("color:#8FA9B9;")
+            if error_message and was_running:
+                status.setText("Continuous: stopped after read error")
+                status.setToolTip(str(error_message))
+                status.setStyleSheet("color:#FF7675; font-weight:700;")
+            else:
+                status.setText("Continuous: stopped")
+                status.setToolTip("")
+                status.setStyleSheet("color:#8FA9B9;")
 
     for index, mode_name in enumerate(CW_MODE_NAMES):
         page = stack.widget(index)

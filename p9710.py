@@ -22,6 +22,13 @@ class P9710Error(RuntimeError):
     pass
 
 
+class P9710CommandError(P9710Error):
+    def __init__(self, command, reply):
+        self.command = command
+        self.reply = reply
+        super().__init__(f"P-9710 rejected command {command!r}: {reply}")
+
+
 @dataclass(frozen=True)
 class P9710CWReading:
     cw_lx: float
@@ -164,7 +171,7 @@ class P9710:
             ser.timeout = old_timeout
         self._trace_reply(command, raw, started, time.perf_counter())
         if raw.startswith("?") or raw == "*":
-            raise P9710Error(f"P-9710 rejected command {command!r}: {raw}")
+            raise P9710CommandError(command, raw)
 
     def read_mv(self, *, attempts: int = 3, retry_delay_s: float = 0.03) -> tuple[float, str, float, float]:
         attempts = max(1, int(attempts))
@@ -195,7 +202,27 @@ class P9710:
         self.command("SB0")
         self.command(f"SR{int(range_id)}")
         self.command(f"SN{int(round(float(integration_ms) * 10.0))}")
-        self.command("SS1" if sync_enabled else "SS0")
+        try:
+            self.command("SS1" if sync_enabled else "SS0")
+        except P9710CommandError as exc:
+            # Some meter states/firmware reject SS0. Continue only when a
+            # readback proves synchronization is already disabled. Do not
+            # substitute SY: that command selects a calibration wavelength.
+            if sync_enabled or exc.reply != "?1":
+                raise
+            try:
+                flags = parse_numeric_reply(self.query("GS7", wait_s=0.005))
+            except P9710Error as readback_error:
+                raise P9710Error(
+                    f"{exc}. Synchronisation OFF could not be verified using GS7: "
+                    f"{readback_error}. Stop the meter's running measurement and "
+                    "set Setup / Synchronisation to Not active before retrying."
+                ) from exc
+            if not math.isfinite(flags) or flags != 0:
+                raise P9710Error(
+                    f"{exc}. GS7 returned {flags:g}; Synchronisation OFF is not "
+                    "confirmed. Set Setup / Synchronisation to Not active before retrying."
+                ) from exc
         if verify:
             expected = {"GR": int(range_id), "GS0": 0,
                         "GS3": int(round(float(integration_ms) * 10.0))}
@@ -229,16 +256,17 @@ class P9710:
         )
 
     def configure_flash_detection(self, range_id: int = 5):
-        self.command("SB0")
-        self.command(f"SR{int(range_id)}")
-        self.command("SN1")
+        self.configure_cw(integration_ms=0.1, range_id=range_id, sync_enabled=False)
         time.sleep(0.05)
 
     def configure_effective(self, window_ms: int, c_s: float = 0.2, range_id: int = 5):
+        # Manufacturer manual §15.3.2: SM uses 10 ms ticks, 10..19999.
+        if not math.isfinite(float(window_ms)) or not 100 <= window_ms <= 199990 or window_ms % 10:
+            raise ValueError("MI window must be 100–199990 ms in 10 ms steps.")
         self.command("SB0")
         self.command(f"SR{int(range_id)}")
         self.command(f"SU{float(c_s):g}")
-        self.command(f"SM{int(window_ms)}")
+        self.command(f"SM{int(window_ms // 10)}")
         self.command("SZ0")
 
     @staticmethod
@@ -435,7 +463,7 @@ class P9710:
         self.configure_flash_detection(range_id=range_id)
         t_ref, trigger_sample = self.detect_reference_flash(
             threshold_lx=threshold_lx,
-            timeout_s=trigger_timeout_s,
+            timeout_s=max(8.0, 2.5 * float(period_s)) if trigger_timeout_s is None else trigger_timeout_s,
         )
         self.configure_effective(window_ms=window_ms, c_s=c_s, range_id=range_id)
         predicted_next_flash = t_ref + float(period_s)

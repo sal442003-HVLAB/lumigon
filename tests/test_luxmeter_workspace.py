@@ -122,3 +122,36 @@ def test_instrument_scroll_is_independent_and_wheel_does_not_change_range(worksp
     assert scroll.verticalScrollBar().value() == retained
     assert workspace.luxmeter_subtabs.tabBar().pos() == tab_position
     assert workspace.luxmeter_subtabs.tabBar().isVisible()
+
+
+def test_continuous_stops_before_the_error_dialog_and_does_not_retry(workspace, monkeypatch, app):
+    class FailedWorker(ImmediateWorker):
+        def start(self):
+            self.failed.emit("P-9710 rejected command 'SS0': ?1")
+            self.finished.emit()
+    monkeypatch.setattr(modes, 'CWWorker', FailedWorker)
+    workspace.p9710_meter_holder['meter'] = SimpleNamespace(is_connected=True, reading=None)
+    dialogs = []
+    def dialog(*args):
+        assert not any(timer.isActive() for timer in workspace.p9710_continuous_timers)
+        dialogs.append(args[-1])
+        app.processEvents()  # A modal dialog also processes timer events.
+    monkeypatch.setattr(modes.QMessageBox, 'critical', dialog)
+    page = workspace.p9710_mode_stack.widget(0)
+    start = next(b for b in page.findChildren(QPushButton) if b.text() == 'Start continuous')
+    start.click()
+    for timer in workspace.p9710_continuous_timers:
+        assert not timer.isActive()
+    assert len(dialogs) == 1
+    assert start.isEnabled()
+    assert workspace.p9710_last_cw_reading is None
+    assert any(label.text() == 'Continuous: stopped after read error' for label in page.findChildren(QLabel))
+
+
+def test_disconnected_continuous_attempt_warns_once_and_stops(workspace, monkeypatch):
+    dialogs = []
+    monkeypatch.setattr(modes.QMessageBox, 'warning', lambda *args: dialogs.append(args[-1]))
+    page = workspace.p9710_mode_stack.widget(0)
+    next(b for b in page.findChildren(QPushButton) if b.text() == 'Start continuous').click()
+    assert len(dialogs) == 1
+    assert not any(timer.isActive() for timer in workspace.p9710_continuous_timers)

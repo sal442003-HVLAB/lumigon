@@ -227,6 +227,9 @@ def attach_p9710_mode_workspace(window):
     def meter_or_warn():
         meter = meter_holder["meter"]
         if meter is None or not meter.is_connected:
+            stop_continuous = getattr(window, "p9710_stop_continuous", None)
+            if callable(stop_continuous):
+                stop_continuous(error_message="P-9710 is not connected.")
             QMessageBox.warning(window, "P-9710", "Connect the P-9710 first.")
             return None
         return meter
@@ -327,6 +330,15 @@ def attach_p9710_mode_workspace(window):
                 reset_button.setEnabled(True)
 
         def failed(message):
+            stop_continuous = getattr(window, "p9710_stop_continuous", None)
+            if callable(stop_continuous):
+                stop_continuous(error_message=message)
+            result.setText(f"{mode_name}: measurement failed")
+            for label in (cw_label, peak_max_label, peak_min_label, p2p_label):
+                label.setText(label.text().split(":", 1)[0] + ": —")
+            utilization_text.setText("Range use: unavailable after read error")
+            _style_utilization(utilization_bar, None)
+            window.p9710_last_cw_reading = None
             QMessageBox.critical(window, f"P-9710 {mode_name}", message)
 
         def completed(reading):
@@ -425,7 +437,8 @@ def attach_p9710_mode_workspace(window):
     pre_spin.setFixedWidth(120)
 
     window_spin = QSpinBox()
-    window_spin.setRange(1, 10000)
+    window_spin.setRange(100, 10000)
+    window_spin.setSingleStep(10)
     window_spin.setSuffix(" ms")
     window_spin.setValue(DEFAULT_WINDOW_MS)
     window_spin.setFixedWidth(120)
@@ -494,6 +507,17 @@ def attach_p9710_mode_workspace(window):
         e_button.setEnabled(True)
 
     def effective_failed(message):
+        stop_continuous = getattr(window, "p9710_stop_continuous", None)
+        if callable(stop_continuous):
+            stop_continuous(error_message=message)
+        e_result.setText("E-effective: —")
+        i_result.setText("I-effective: —")
+        trigger_result.setText("Trigger sample: —")
+        e_gp_text.setText("Range use: unavailable after read error")
+        _style_utilization(e_gp_bar, None)
+        window.p9710_last_e_effective_lx = None
+        window.p9710_last_i_effective_cd = None
+        window.p9710_last_reading = None
         e_status.setText("Measurement failed")
         e_status.setStyleSheet("color:#FF7675; font-weight:700;")
         QMessageBox.critical(window, "P-9710 I-Effective (SC)", message)
@@ -513,6 +537,9 @@ def attach_p9710_mode_workspace(window):
         window.p9710_last_reading = reading
 
     def start_effective():
+        stop_continuous = getattr(window, "p9710_stop_continuous", None)
+        if callable(stop_continuous):
+            stop_continuous()
         meter = meter_or_warn()
         if meter is None or worker_holder["worker"] is not None:
             return

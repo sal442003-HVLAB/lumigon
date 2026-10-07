@@ -80,3 +80,71 @@ def test_missing_gp_is_logged_and_rejected(make_meter):
     with pytest.raises(P9710Error, match='No response'):
         meter.read_range_utilization()
     assert trace[0][:2] == ('GP', '<NO RESPONSE>')
+
+
+def test_rejected_ss0_is_allowed_only_when_readback_proves_sync_already_off(make_meter):
+    meter = make_meter(SS0=b'?1\n', GS7=b'0\n')
+    meter.configure_cw(integration_ms=.1, range_id=5, verify=True)
+    assert meter.serial.sent == ['SB0', 'SR5', 'SN1', 'SS0', 'GS7', 'GR', 'GS0', 'GS3']
+
+
+@pytest.mark.parametrize('reply', [b'1\n', b'2\n', b'?1\n', b'', b'nan\n'])
+def test_rejected_ss0_must_not_be_ignored_with_unknown_or_active_sync(make_meter, reply):
+    meter = make_meter(SS0=b'?1\n', GS7=reply)
+    with pytest.raises(P9710Error, match='Synchronisation OFF'):
+        meter.configure_cw(integration_ms=.1, range_id=5)
+
+
+def test_other_ss_errors_and_enabling_sync_are_never_silently_ignored(make_meter):
+    meter = make_meter(SS0=b'?16\n', GS7=b'0\n')
+    with pytest.raises(P9710Error, match='SS0'):
+        meter.configure_cw(integration_ms=.1)
+    assert 'GS7' not in meter.serial.sent
+    meter = make_meter(SS1=b'?1\n', GS7=b'0\n')
+    with pytest.raises(P9710Error, match='SS1'):
+        meter.configure_cw(integration_ms=.1, sync_enabled=True)
+
+
+@pytest.mark.parametrize('milliseconds,ticks', [(100, 10), (600, 60), (10000, 1000)])
+def test_effective_window_is_sent_in_10ms_device_ticks(make_meter, milliseconds, ticks):
+    meter = make_meter()
+    meter.configure_effective(window_ms=milliseconds)
+    assert f'SM{ticks}' in meter.serial.sent
+
+
+@pytest.mark.parametrize('milliseconds', [0, 10, 99, 601, 200000])
+def test_invalid_effective_window_is_rejected_before_any_commands(make_meter, milliseconds):
+    meter = make_meter()
+    with pytest.raises(ValueError, match='10 ms steps'):
+        meter.configure_effective(window_ms=milliseconds)
+    assert meter.serial.sent == []
+
+
+def test_effective_trigger_has_a_finite_default_timeout(make_meter, monkeypatch):
+    meter = make_meter()
+    monkeypatch.setattr(meter, 'configure_flash_detection', lambda **kwargs: None)
+    def trigger(**kwargs):
+        assert kwargs['timeout_s'] == 8.0
+        raise P9710Error('No reference flash')
+    monkeypatch.setattr(meter, 'detect_reference_flash', trigger)
+    with pytest.raises(P9710Error, match='No reference flash'):
+        meter.synchronized_effective(period_s=3.17, pretrigger_ms=100, window_ms=600)
+
+
+def test_effective_reply_wait_matches_the_actual_device_window(make_meter, monkeypatch):
+    meter = make_meter(GP=b'20\n')
+    monkeypatch.setattr(meter, 'configure_flash_detection', lambda **kwargs: None)
+    monkeypatch.setattr(meter, 'detect_reference_flash', lambda **kwargs: (10.0, 8.0))
+    monkeypatch.setattr(meter, '_wait_until', lambda target: None)
+    original_query = meter.query
+    def query(command, **kwargs):
+        if command == 'MI':
+            assert 'SM60' in meter.serial.sent
+            assert kwargs['wait_s'] == pytest.approx(.65)
+            assert kwargs['timeout_s'] == pytest.approx(2.6)
+            return '4.0'
+        return original_query(command, **kwargs)
+    monkeypatch.setattr(meter, 'query', query)
+    result = meter.synchronized_effective(period_s=3.17, pretrigger_ms=100, window_ms=600)
+    assert result.window_ms == 600
+    assert result.e_effective_lx == 4.0
