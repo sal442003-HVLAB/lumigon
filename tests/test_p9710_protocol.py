@@ -22,7 +22,8 @@ class ReplySerial:
         pass
 
     def readline(self):
-        return self.replies.get(self.sent[-1], b'\n')
+        reply = self.replies.get(self.sent[-1], b'\n')
+        return reply.pop(0) if isinstance(reply, list) else reply
 
 
 @pytest.fixture
@@ -198,14 +199,14 @@ def test_flash_setup_checks_integration_even_after_an_accepted_setter(make_meter
 
 def test_full_effective_path_with_rejected_sn1_and_confirmed_readback(make_meter, monkeypatch):
     meter = make_meter(SN1=b'?1\n', SS0=b'?1\n', GS7=b'60\n',
-                       MV=b'8\n', MI=b'4\n', GP=b'20\n')
+                       MV=[b'0\n', b'8\n'], MI=b'4\n', GP=b'20\n')
     monkeypatch.setattr(meter, '_wait_until', lambda target: None)
     reading = meter.synchronized_effective(period_s=3.17, pretrigger_ms=100, window_ms=600)
     assert reading.e_effective_lx == 4.0
     assert reading.trigger_sample_lx == 8.0
     assert reading.range_utilization_pct == 20.0
     assert meter.serial.sent == ['SB0', 'SR5', 'SN1', 'GS3', 'SS0', 'GS7',
-                                'GR', 'GS0', 'GS3', 'MV', 'SB0', 'SR5',
+                                'GR', 'GS0', 'GS3', 'MV', 'MV', 'SB0', 'SR5',
                                 'SU0.2', 'SM60', 'SZ0', 'MI', 'GP']
 
 
@@ -284,3 +285,93 @@ def test_query_uses_its_requested_timeout_and_restores_serial_timeout(make_meter
     meter.serial.readline = readline
     assert meter.query('MI', timeout_s=2.6) == '4.0'
     assert meter.serial.timeout == 1.5
+
+
+def test_reference_trigger_ignores_initial_bright_sample_until_a_real_off_on_edge(make_meter, monkeypatch):
+    meter = make_meter()
+    samples = iter([(45.5, '45.5', 0.0, .02), (46.0, '46', .02, .04),
+                    (0.0, '0', .04, .06), (45.5, '45.5', .06, .08)])
+    monkeypatch.setattr(meter, 'read_mv', lambda: next(samples))
+    edge_time, trigger = meter.detect_reference_flash(threshold_lx=5.0)
+    assert edge_time == pytest.approx(.06)
+    assert trigger == 45.5
+
+
+def test_constant_bright_light_is_not_a_reference_flash(make_meter, monkeypatch):
+    meter = make_meter()
+    clock = [0.0]
+    monkeypatch.setattr(p9710.time, 'perf_counter', lambda: clock[0])
+    def sample():
+        before = clock[0]
+        clock[0] += .1
+        return 45.5, '45.5', before, clock[0]
+    monkeypatch.setattr(meter, 'read_mv', sample)
+    with pytest.raises(P9710Error, match='No reference flash'):
+        meter.detect_reference_flash(threshold_lx=5.0, timeout_s=.5)
+
+
+def test_explicit_underload_can_arm_a_real_flash_edge(make_meter, monkeypatch):
+    meter = make_meter()
+    calls = []
+    def sample():
+        calls.append(True)
+        if len(calls) == 1:
+            raise P9710Error('P-9710 status ?32')
+        return 45.5, '45.5', 1.0, 1.02
+    monkeypatch.setattr(meter, 'read_mv', sample)
+    monkeypatch.setattr(p9710.time, 'perf_counter', lambda: .9)
+    assert meter.detect_reference_flash() == pytest.approx((.955, 45.5))
+
+
+@pytest.mark.parametrize('now, expected', [(10.5, 14.08), (14.1, 18.26), (22.5, 26.62)])
+def test_effective_start_skips_cycles_consumed_by_configuration(monkeypatch, now, expected):
+    monkeypatch.setattr(p9710.time, 'perf_counter', lambda: now)
+    assert P9710._next_effective_start(10.0, 4.18, 100) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize('period, pretrigger, window', [
+    (float('nan'), 100, 600), (float('inf'), 100, 600),
+    (4.18, 600, 600), (4.18, 700, 600), (0.6, 100, 600), (0.5, 100, 600),
+])
+def test_impossible_single_flash_timing_is_rejected_before_any_io(make_meter, period, pretrigger, window):
+    meter = make_meter()
+    with pytest.raises(ValueError):
+        meter.synchronized_effective(period_s=period, pretrigger_ms=pretrigger, window_ms=window)
+    assert meter.serial.sent == []
+
+
+@pytest.mark.parametrize('constant', [0.0, 6.0, float('nan'), float('inf')])
+def test_invalid_schmidt_clausen_constant_is_rejected_before_configuring(make_meter, constant):
+    meter = make_meter()
+    with pytest.raises(ValueError, match='Schmidt-Clausen C'):
+        meter.configure_effective(window_ms=600, c_s=constant)
+    assert meter.serial.sent == []
+
+
+def test_delayed_setup_captures_a_future_complete_pulse_instead_of_a_tail(make_meter, monkeypatch):
+    meter = make_meter()
+    clock = [0.0]
+    monkeypatch.setattr(p9710.time, 'perf_counter', lambda: clock[0])
+    monkeypatch.setattr(meter, 'configure_flash_detection', lambda **kwargs: None)
+    monkeypatch.setattr(meter, 'detect_reference_flash', lambda **kwargs: (0.0, 50.0))
+    def configure(**kwargs):
+        clock[0] = 2.38  # first and second flash-start targets are already past
+    monkeypatch.setattr(meter, 'configure_effective', configure)
+    targets = []
+    def wait(target):
+        targets.append(target)
+        clock[0] = target
+    monkeypatch.setattr(meter, '_wait_until', wait)
+    def query(command, **kwargs):
+        if command == 'GP':
+            return '20'
+        assert command == 'MI'
+        # Independent rectangular source model: 50 lx, 400 ms ON, period 1 s.
+        start, end = clock[0], clock[0] + .6
+        width = sum(max(0.0, min(end, cycle + .4) - max(start, cycle))
+                    for cycle in range(5))
+        return str(50.0 * width / (.2 + width))
+    monkeypatch.setattr(meter, 'query', query)
+    reading = meter.synchronized_effective(period_s=1.0, pretrigger_ms=100, window_ms=600)
+    assert targets == pytest.approx([2.9])
+    assert reading.e_effective_lx == pytest.approx(50.0 * .4 / .6)

@@ -114,3 +114,44 @@ Simulated tests cover delayed acknowledgements/rejections, absent/partial
 frames, subsequent-send blocking, MI timeout preservation, genuine SU/SM
 rejection and the diagnostic content. This corrects a verified code defect;
 it does not yet establish the reason for the observed hardware rejection.
+
+## Low Effective values and visible timing controls
+
+The operator subsequently obtained a native MI result: the screenshot shows
+E-effective 1.5117 lx, I-effective 37.79 cd at 5 m, and a trigger sample of
+45.513 lx with an entered period of 4.1800 s. This is not evidence that the
+full pulse was captured. Effective illuminance depends on pulse area, peak
+and C (manufacturer Appendix 17.1), so peak alone cannot establish an
+expected Effective value. Native values are not rescaled toward an expected
+number. Existing static offset is retained (`SZ0` selects the SO offset;
+it does not itself clear that offset), and source period, pulse duration,
+static offset and complete window coverage remain hardware checks.
+
+Two concrete scheduling issues were corrected. Fixed-threshold detection
+previously initialized the preceding sample to zero, allowing the very first
+bright sample to be treated as a rising edge even when already mid-flash.
+It now requires an observed below-threshold sample before a bright crossing;
+a genuine underload may arm the dark side, and non-finite samples fail.
+After Effective configuration, the next acquisition start is selected from
+future cycles of the entered period (with 50 ms preparation lead), so setup
+delays cannot automatically trigger an expired prediction. This also applies
+to the adaptive MI path. Neither fix verifies the user-entered period or
+proves optical coverage under source jitter or operating-system delays.
+
+The single-flash timing setup rejects non-finite values, windows that end
+before the predicted edge (window <= pre-trigger), and windows at least as
+long as the period, before any device I/O. C is limited to its documented
+0.0001..5.9999 s range. The existing "Advanced settings" section was collapsed
+in the screenshot, not empty. It now starts expanded, showing pre-trigger,
+MI window, threshold and C; it still supports collapsing. A timing note
+explains full-pulse coverage, and inputs are disabled during acquisition.
+Results now say "PC schedule offset", rather than implying a measured
+optical synchronization error. The returned native MI and lux-to-candela
+conversion are unchanged.
+
+Regression tests cover starting in the bright phase, constant light, an
+underload-to-bright transition, setup delays spanning multiple periods,
+impossible timing, invalid C, and Advanced visibility/toggling. A rectangular
+source model demonstrates selecting a future full pulse rather than its
+tail. UI inspection at 1366x768 confirmed all four Advanced controls appear
+with bounded vertical scrolling. Actual flash validation remains pending.

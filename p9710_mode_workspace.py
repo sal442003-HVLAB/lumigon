@@ -474,8 +474,8 @@ def attach_p9710_mode_workspace(window):
     threshold_spin.setFixedWidth(140)
 
     c_spin = QDoubleSpinBox()
-    c_spin.setRange(0.001, 10.0)
-    c_spin.setDecimals(3)
+    c_spin.setDecimals(4)
+    c_spin.setRange(0.0001, 5.9999)
     c_spin.setSuffix(" s")
     c_spin.setValue(DEFAULT_C_S)
     c_spin.setFixedWidth(120)
@@ -508,11 +508,23 @@ def attach_p9710_mode_workspace(window):
         ("Pre-trigger:", pre_spin), ("MI window:", window_spin),
         ("Trigger threshold:", threshold_spin), ("Schmidt-Clausen C:", c_spin),
     ])
-    settings.layout().addRow(CollapsibleSection("Advanced settings", advanced))
+    advanced_section = CollapsibleSection("Advanced settings", advanced)
+    advanced_section.set_expanded(True)
+    settings.layout().addRow(advanced_section)
+    timing_note = QLabel(
+        "Set period from the actual flash repetition time. The MI window must cover "
+        "pre-trigger plus the whole flash, and remain shorter than the period. "
+        "PC schedule offset reports command timing; it does not verify optical pulse coverage."
+    )
+    timing_note.setWordWrap(True)
+    timing_note.setStyleSheet("color:#8FA9B9;")
+    advanced.layout().addRow(timing_note)
     settings.layout().addRow(e_button)
     results = result_section("Effective measurement", e_result, i_result, trigger_result,
                              e_status, e_gp_text, e_gp_bar)
     egrid.addWidget(two_columns(settings, results, effective_page))
+    effective_inputs = (period_spin, pre_spin, window_spin, range_spin,
+                        threshold_spin, c_spin, distance_spin)
 
     def effective_finished():
         worker = worker_holder["worker"]
@@ -520,6 +532,8 @@ def attach_p9710_mode_workspace(window):
             worker.deleteLater()
         worker_holder["worker"] = None
         e_button.setEnabled(True)
+        for control in effective_inputs:
+            control.setEnabled(True)
 
     def clear_effective_results():
         e_result.setText("E-effective: —")
@@ -560,7 +574,8 @@ def attach_p9710_mode_workspace(window):
         e_result.setText(f"E-effective: {reading.e_effective_lx:.4f} lx")
         i_result.setText(f"I-effective: {i_effective:.2f} cd")
         trigger_result.setText(f"Trigger sample: {reading.trigger_sample_lx:.3f} lx")
-        e_status.setText(f"Complete — start error {reading.software_start_error_ms:+.2f} ms")
+        e_status.setText(f"Read — PC schedule offset {reading.software_start_error_ms:+.2f} ms")
+        e_status.setToolTip("Software scheduling offset only. Full optical pulse coverage is not verified by this value.")
         e_status.setStyleSheet("color:#55EFC4;")
         _update_range_use(e_gp_text, e_gp_bar,
                           reading.range_utilization_pct, reading.range_id)
@@ -585,6 +600,8 @@ def attach_p9710_mode_workspace(window):
         if meter is None:
             return
         e_button.setEnabled(False)
+        for control in effective_inputs:
+            control.setEnabled(False)
         e_status.setText("Waiting for reference flash…")
         e_status.setStyleSheet("color:#40B9D0; font-weight:700;")
         worker = EffectiveWorker(
@@ -630,6 +647,7 @@ def attach_p9710_mode_workspace(window):
     window.p9710_meter_holder = meter_holder
     window.p9710_mode_worker_holder = worker_holder
     window.p9710_effective_period_spin = period_spin
+    window.p9710_effective_advanced_section = advanced_section
     window.p9710_last_cw_reading = None
     window.p9710_last_e_effective_lx = None
     window.p9710_last_i_effective_cd = None

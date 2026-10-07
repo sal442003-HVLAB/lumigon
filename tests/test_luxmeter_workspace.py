@@ -117,6 +117,7 @@ def test_new_effective_attempt_clears_old_range_and_results_before_worker(worksp
     workspace.p9710_effective_period_spin.setValue(3.17)
     class WaitingWorker(ImmediateWorker):
         def start(self):
+            assert not workspace.p9710_effective_period_spin.isEnabled()
             assert bar.value() == 0
             assert bar.format() == 'Unavailable'
             assert workspace.p9710_last_e_effective_lx is None
@@ -130,6 +131,26 @@ def test_new_effective_attempt_clears_old_range_and_results_before_worker(worksp
     next(b for b in page.findChildren(QPushButton) if b.text() == 'Measure synchronized').click()
     assert workspace.p9710_mode_worker_holder['worker'] is None
     assert workspace.p9710_effective_period_spin.value() == 3.17
+    assert workspace.p9710_effective_period_spin.isEnabled()
+
+
+def test_effective_advanced_settings_are_visible_and_can_be_collapsed(workspace, app):
+    workspace.p9710_mode_combo.setCurrentIndex(6)
+    workspace.resize(1366, 1000)
+    workspace.show()
+    app.processEvents()
+    section = workspace.p9710_effective_advanced_section
+    assert section.button.isChecked()
+    assert section.content.isVisible()
+    labels = [label.text() for label in section.content.findChildren(QLabel)]
+    assert all(caption in labels for caption in (
+        'Pre-trigger:', 'MI window:', 'Trigger threshold:', 'Schmidt-Clausen C:',
+    ))
+    assert all(spin.isVisible() for spin in section.content.findChildren(modes.QSpinBox))
+    section.button.click()
+    assert not section.content.isVisible()
+    section.button.click()
+    assert section.content.isVisible()
 
 
 def test_instrument_scroll_is_independent_and_wheel_does_not_change_range(workspace, app):

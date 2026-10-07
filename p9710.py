@@ -311,6 +311,8 @@ class P9710:
         # Manufacturer manual §15.3.2: SM uses 10 ms ticks, 10..19999.
         if not math.isfinite(float(window_ms)) or not 100 <= window_ms <= 199990 or window_ms % 10:
             raise ValueError("MI window must be 100–199990 ms in 10 ms steps.")
+        if not math.isfinite(float(c_s)) or not 0.0001 <= c_s <= 5.9999:
+            raise ValueError("Schmidt-Clausen C must be 0.0001–5.9999 s.")
         self.command("SB0")
         self.command(f"SR{int(range_id)}")
         self.command(f"SU{float(c_s):g}")
@@ -414,6 +416,28 @@ class P9710:
             if remaining > 0.020:
                 time.sleep(remaining - 0.010)
 
+    @staticmethod
+    def _next_effective_start(t_ref: float, period_s: float, pretrigger_ms: int) -> float:
+        # Configuration can consume the interval to the very next flash.
+        # Choose a future cycle rather than starting an already expired window.
+        first_start = t_ref + period_s - pretrigger_ms / 1000.0
+        earliest = time.perf_counter() + 0.05
+        cycles = max(0, math.ceil((earliest - first_start) / period_s))
+        return first_start + cycles * period_s
+
+    @staticmethod
+    def _validate_effective_timing(period_s, pretrigger_ms, window_ms):
+        if not math.isfinite(float(period_s)) or period_s <= 0:
+            raise ValueError("Pulse period must be finite and positive.")
+        if not math.isfinite(float(pretrigger_ms)) or pretrigger_ms < 0:
+            raise ValueError("Pre-trigger must be finite and non-negative.")
+        if not math.isfinite(float(window_ms)) or not 100 <= window_ms <= 199990 or window_ms % 10:
+            raise ValueError("MI window must be 100–199990 ms in 10 ms steps.")
+        if pretrigger_ms >= window_ms:
+            raise ValueError("MI window must be longer than pre-trigger to include the expected flash.")
+        if window_ms / 1000.0 >= period_s:
+            raise ValueError("MI window must be shorter than pulse period for a single-flash measurement.")
+
     def synchronized_effective_adaptive(
         self,
         *,
@@ -424,12 +448,7 @@ class P9710:
         c_s: float = 0.2,
         trigger_timeout_s: float | None = None,
     ) -> P9710EffectiveReading:
-        if period_s <= 0:
-            raise ValueError("Pulse period must be positive.")
-        if pretrigger_ms < 0:
-            raise ValueError("Pre-trigger cannot be negative.")
-        if window_ms <= 0:
-            raise ValueError("MI window must be positive.")
+        self._validate_effective_timing(period_s, pretrigger_ms, window_ms)
 
         timeout_s = max(8.0, 2.5 * float(period_s)) if trigger_timeout_s is None else float(trigger_timeout_s)
         t_ref, trigger_sample, selected_range, detection_gp = self.detect_reference_flash_adaptive(
@@ -438,8 +457,7 @@ class P9710:
         )
 
         self.configure_effective(window_ms=window_ms, c_s=c_s, range_id=selected_range)
-        predicted_next_flash = t_ref + float(period_s)
-        target_start = predicted_next_flash - (float(pretrigger_ms) / 1000.0)
+        target_start = self._next_effective_start(t_ref, float(period_s), pretrigger_ms)
         self._wait_until(target_start)
 
         actual_start = time.perf_counter()
@@ -469,10 +487,10 @@ class P9710:
 
     def detect_reference_flash(self, threshold_lx: float = 5.0, timeout_s: float | None = None) -> tuple[float, float]:
         threshold_lx = float(threshold_lx)
-        if threshold_lx <= 0.0:
+        if not math.isfinite(threshold_lx) or threshold_lx <= 0.0:
             raise ValueError("Flash trigger threshold must be positive.")
         deadline = None if timeout_s is None else time.perf_counter() + float(timeout_s)
-        previous_value = 0.0
+        previous_value = None
         previous_t = None
         last_value = None
         while True:
@@ -481,10 +499,19 @@ class P9710:
                 raise P9710Error(
                     f"No reference flash crossed {threshold_lx:g} lx within {timeout_s:g} s.{detail}"
                 )
-            value, _raw, t1, t2 = self.read_mv()
+            try:
+                value, _raw, t1, t2 = self.read_mv()
+            except P9710Error as exc:
+                if self._status_code(exc) != "underload":
+                    raise
+                # A genuine underload reports the dark side of the edge.
+                value = 0.0
+                t1 = t2 = time.perf_counter()
+            if not math.isfinite(value):
+                raise P9710Error("Non-finite reference-flash sample: acquisition rejected.")
             last_value = value
             t_mid = (t1 + t2) / 2.0
-            if previous_value < threshold_lx <= value:
+            if previous_value is not None and previous_value < threshold_lx <= value:
                 edge_time = t_mid if previous_t is None else (previous_t + t_mid) / 2.0
                 return edge_time, value
             previous_value = value
@@ -501,12 +528,7 @@ class P9710:
         c_s: float = 0.2,
         trigger_timeout_s: float | None = None,
     ) -> P9710EffectiveReading:
-        if period_s <= 0:
-            raise ValueError("Pulse period must be positive.")
-        if pretrigger_ms < 0:
-            raise ValueError("Pre-trigger cannot be negative.")
-        if window_ms <= 0:
-            raise ValueError("MI window must be positive.")
+        self._validate_effective_timing(period_s, pretrigger_ms, window_ms)
 
         self.configure_flash_detection(range_id=range_id)
         t_ref, trigger_sample = self.detect_reference_flash(
@@ -514,8 +536,7 @@ class P9710:
             timeout_s=max(8.0, 2.5 * float(period_s)) if trigger_timeout_s is None else trigger_timeout_s,
         )
         self.configure_effective(window_ms=window_ms, c_s=c_s, range_id=range_id)
-        predicted_next_flash = t_ref + float(period_s)
-        target_start = predicted_next_flash - (float(pretrigger_ms) / 1000.0)
+        target_start = self._next_effective_start(t_ref, float(period_s), pretrigger_ms)
         self._wait_until(target_start)
         actual_start = time.perf_counter()
         raw = self.query(
