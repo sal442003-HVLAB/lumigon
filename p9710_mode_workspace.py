@@ -688,14 +688,6 @@ def attach_p9710_mode_workspace(window):
     advanced_section.button.toggled.connect(lambda _: QTimer.singleShot(0, update_mode_height))
     show_mode(0)
 
-    note = QLabel(
-        "CW Maximum/Minimum are accumulated by Lumigon from successive CW reads. "
-        "Peak Maximum/Minimum/Peak-to-Peak use the P-9710 GA/GB/GD values from the latest CW measurement."
-    )
-    note.setWordWrap(True)
-    note.setStyleSheet("color:#7892A3;")
-    root.addWidget(CollapsibleSection("About measurement modes", note))
-
     insert_index = parent_layout.indexOf(getattr(window, "luxmeter_effective_box", lux_box))
     parent_layout.insertWidget(insert_index + 1 if insert_index >= 0 else parent_layout.count(), box)
 

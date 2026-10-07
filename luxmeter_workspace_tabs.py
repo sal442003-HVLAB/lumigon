@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import QEvent, QObject, QSignalBlocker
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QLayout,
-                             QStackedWidget, QVBoxLayout, QWidget)
+                             QSizePolicy, QStackedWidget, QVBoxLayout, QWidget)
 
 from luxmeter_controls import LUXMETER_CG, LUXMETER_GIGAHERTZ
 
@@ -52,6 +52,12 @@ def attach_luxmeter_workspace_tabs(window):
     if selector is None:
         selector = QComboBox()
         selector.addItems([LUXMETER_CG, LUXMETER_GIGAHERTZ])
+    for index, caption, instrument in (
+        (0, "C&G Ph-Amp MB7", LUXMETER_CG),
+        (1, "Gigahertz-Optik P-9710", LUXMETER_GIGAHERTZ),
+    ):
+        selector.setItemText(index, caption)
+        selector.setItemData(index, instrument)
     connection = getattr(window, "luxmeter_connection_box", None)
     if connection is not None:
         grid = connection.layout()
@@ -74,8 +80,10 @@ def attach_luxmeter_workspace_tabs(window):
     chooser_layout.setSpacing(12)
     chooser_layout.addWidget(QLabel("Instrument:"))
     selector.setParent(chooser)
-    selector.setMinimumWidth(300)
-    chooser_layout.addWidget(selector, 1)
+    selector.setMinimumWidth(0)
+    selector.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+    selector.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+    chooser_layout.addWidget(selector)
     chooser_layout.addStretch(1)
     root.addWidget(chooser)
 
@@ -118,7 +126,7 @@ def attach_luxmeter_workspace_tabs(window):
             return
         current["index"] = index
         stack.setCurrentIndex(index)
-        window.luxmeter_selected_instrument = selector.currentText()
+        window.luxmeter_selected_instrument = selector.currentData()
         stack.updateGeometry()
 
     selector.currentIndexChanged.connect(select_instrument)
